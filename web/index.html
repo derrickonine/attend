@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FaceAttend – Système de présence</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;900&family=DM+Mono&display=swap');
+    :root {
+      --bg: #f7f4ef;
+      --surface: #ffffff;
+      --surface2: #f3eee7;
+      --line: #e2dbd1;
+      --line2: #cfc5b8;
+      --ink: #1b1713;
+      --muted: #766b60;
+      --soft: #9a9086;
+      --accent: #c65f2a;
+      --accent2: #e28147;
+      --accent-bg: #fff0e8;
+      --green: #26734d;
+      --green-bg: #e7f5ed;
+      --red: #bb3b30;
+      --red-bg: #fdebe8;
+      --blue: #255aa8;
+      --blue-bg: #e8eef8;
+      --amber: #b56512;
+      --amber-bg: #fff3df;
+      --shadow: 0 10px 30px rgba(28,22,16,.08), 0 1px 2px rgba(28,22,16,.06);
+      --radius: 10px;
+      font-family: 'DM Sans', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); overflow: hidden; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+
+    /* LOGIN */
+    .login {
+      min-height: 100vh; display: grid; place-items: center; padding: 28px;
+      background:
+        radial-gradient(circle at 18% 72%, rgba(198,95,42,.10), transparent 34%),
+        radial-gradient(circle at 82% 16%, rgba(38,115,77,.09), transparent 30%),
+        var(--bg);
+    }
+    .login::before {
+      content: ""; position: fixed; inset: 0; opacity: .42; pointer-events: none;
+      background-image: radial-gradient(circle, #cfc5b8 1px, transparent 1px);
+      background-size: 30px 30px;
+    }
+    .login-card {
+      position: relative; width: min(540px, 100%); padding: 38px;
+      border: 1px solid var(--line); border-radius: 20px;
+      background: rgba(255,255,255,.93); box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+    .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 30px; }
+    .brand-mark {
+      width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+      background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; font-weight: 900;
+      font-size: 20px; box-shadow: 0 8px 18px rgba(198,95,42,.25);
+    }
+    .brand-name { font-size: 22px; font-weight: 900; }
+    .brand-sub { color: var(--soft); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    .login-tabs { display: flex; gap: 4px; background: var(--surface2); border-radius: 12px; padding: 4px; margin-bottom: 28px; }
+    .login-tab { flex: 1; padding: 10px; text-align: center; border-radius: 9px; font-size: 13px; font-weight: 700; color: var(--muted); cursor: pointer; border: none; background: none; transition: .15s; }
+    .login-tab.active { background: white; color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .field { margin-bottom: 16px; }
+    .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; margin-bottom: 7px; }
+    .input, .select {
+      width: 100%; border: 1.5px solid var(--line); background: var(--surface2); color: var(--ink);
+      border-radius: 10px; padding: 12px 14px; outline: none; transition: .15s;
+    }
+    .input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(198,95,42,.13); }
+    .preview { display: flex; gap: 12px; align-items: center; background: var(--accent-bg); border: 1px solid rgba(198,95,42,.18); padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+    /* BUTTONS */
+    .btn {
+      border: 0; border-radius: 9px; padding: 10px 14px; background: var(--surface2); color: var(--ink);
+      font-weight: 700; transition: transform .12s, background .12s, box-shadow .12s; display: inline-flex; align-items: center; gap: 7px;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; box-shadow: 0 8px 18px rgba(198,95,42,.24); }
+    .btn.green { background: var(--green); color: white; box-shadow: 0 6px 16px rgba(38,115,77,.2); }
+    .btn.red { background: var(--red-bg); color: var(--red); border: 1px solid rgba(187,59,48,.2); }
+    .btn.outline { background: transparent; border: 1.5px solid var(--line2); color: var(--muted); }
+    .btn.blue { background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(37,90,168,.15); }
+    .btn.small { padding: 7px 11px; font-size: 12px; border-radius: 7px; }
+    .btn.full { width: 100%; padding: 14px; justify-content: center; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+    /* APP SHELL */
+    .app { height: 100vh; display: flex; flex-direction: column; }
+    .topbar {
+      height: 58px; background: var(--surface); border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 14px; padding: 0 20px; flex-shrink: 0;
+    }
+    .topbrand { display: flex; align-items: center; gap: 9px; font-weight: 900; font-size: 15px; }
+    .topmark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color:white; display:grid; place-items:center; font-size: 14px; font-weight: 900; }
+    .divider { height: 26px; width: 1px; background: var(--line); }
+    .chips { display: flex; gap: 7px; flex-wrap: wrap; }
+    .chip { border: 1px solid var(--line); background: var(--surface2); color: var(--muted); padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+    .chip.live { background: var(--green-bg); color: var(--green); border-color: rgba(38,115,77,.2); animation: pulse-chip 2s ease-in-out infinite; }
+    @keyframes pulse-chip { 0%,100% { opacity:1 } 50% { opacity:.7 } }
+    .top-right { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+    .teacher-pill { display: flex; align-items: center; gap: 8px; background: var(--accent-bg); border: 1px solid rgba(198,95,42,.18); border-radius: 10px; padding: 6px 11px; font-weight: 750; font-size: 13px; }
+    .mini-avatar { width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; background: #c65f2a22; color: var(--accent); font-size: 11px; font-weight: 900; }
+
+    /* LAYOUT */
+    .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 330px; }
+    .sidebar { background: var(--surface); border-right: 1px solid var(--line); overflow: auto; display: flex; flex-direction: column; }
+    .rightpanel { background: var(--surface); border-left: 1px solid var(--line); overflow: hidden; display: flex; flex-direction: column; }
+    .side-section { padding: 16px 12px 6px; }
+    .side-label { color: var(--soft); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 800; margin-bottom: 8px; }
+    .nav { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 9px; color: var(--muted); font-size: 13px; font-weight: 700; border: 1px solid transparent; cursor: pointer; margin-bottom: 2px; }
+    .nav:hover { background: var(--surface2); color: var(--ink); }
+    .nav.active { color: var(--accent); background: var(--accent-bg); border-color: rgba(198,95,42,.16); }
+    .nav .nav-badge { margin-left: auto; font-size: 11px; background: var(--surface2); color: var(--soft); padding: 2px 7px; border-radius: 999px; }
+    .nav.active .nav-badge { background: rgba(198,95,42,.15); color: var(--accent); }
+    .side-bottom { margin-top: auto; padding: 14px; border-top: 1px solid var(--line); }
+    .stat-mini { border: 1px solid var(--line); background: var(--surface2); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+    .stat-mini .sm-label { color: var(--soft); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 2px; }
+    .stat-mini .sm-value { font-size: 26px; font-weight: 900; margin-top: 2px; }
+
+    /* MAIN AREA */
+    .center { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .camera { flex: 1; min-height: 0; background: #1c1815; position: relative; display: grid; place-items: center; overflow: hidden; }
+    .camera img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .cam-empty { color: #d8d2ca; display: grid; gap: 12px; text-align: center; }
+    .cam-empty strong { font-size: 18px; color: #a09890; }
+    .scanline { position: absolute; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, rgba(198,95,42,.7), transparent); animation: scan 2.4s linear infinite; opacity: .7; pointer-events: none; }
+    @keyframes scan { from { top: 0 } to { top: 100% } }
+    .corner { position: absolute; width: 28px; height: 28px; border-color: var(--accent); border-style: solid; opacity: .85; pointer-events: none; }
+    .tl { top: 18px; left: 18px; border-width: 2px 0 0 2px; }
+    .tr { top: 18px; right: 18px; border-width: 2px 2px 0 0; }
+    .bl { bottom: 66px; left: 18px; border-width: 0 0 2px 2px; }
+    .br { bottom: 66px; right: 18px; border-width: 0 2px 2px 0; }
+    .statusbar {
+      height: 54px; flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 12px; color: var(--muted);
+    }
+    .status-items { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; margin-right: 5px; }
+    .dot.green { background: var(--green); }
+    .dot.orange { background: var(--accent); animation: blink 1s step-end infinite; }
+    .dot.gray { background: var(--soft); }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* VIEW CONTENT */
+    .view { flex: 1; overflow: auto; padding: 22px; }
+    .view-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+    .view-title { font-size: 20px; font-weight: 900; }
+    .view-sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+    .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 13px; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.03); }
+    .student-card { display: grid; gap: 10px; }
+    .avatar { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; font-weight: 900; font-size: 15px; flex-shrink: 0; }
+    .avatar.lg { width: 52px; height: 52px; font-size: 18px; border-radius: 14px; }
+    .name { font-weight: 800; font-size: 14px; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 800; gap: 4px; }
+    .badge.green { background: var(--green-bg); color: var(--green); }
+    .badge.red { background: var(--red-bg); color: var(--red); }
+    .badge.blue { background: var(--blue-bg); color: var(--blue); }
+    .badge.amber { background: var(--amber-bg); color: var(--amber); }
+    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-bottom: 18px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+    .stat-label { color: var(--soft); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; }
+    .stat-value { font-size: 36px; font-weight: 900; margin-top: 4px; line-height: 1; }
+
+    /* TABLE */
+    .table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+    th { color: var(--soft); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; background: var(--surface2); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #faf7f3; }
+
+    /* RIGHT PANEL */
+    .tabs { display: flex; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+    .tab { flex: 1; padding: 13px; text-align: center; font-size: 12px; font-weight: 800; color: var(--muted); cursor: pointer; border: none; background: none; transition: .12s; }
+    .tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); background: var(--accent-bg); }
+    .panel-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+    /* PRESENCE ITEMS - LIVE */
+    .presence-live { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: var(--green-bg); border: 1px solid rgba(38,115,77,.15); margin-bottom: 8px; animation: slide-in .3s ease; }
+    @keyframes slide-in { from { transform: translateX(20px); opacity: 0 } to { transform: none; opacity: 1 } }
+    .presence-time { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--green); background: rgba(38,115,77,.12); padding: 3px 7px; border-radius: 6px; flex-shrink: 0; }
+    .presence-conf { margin-left: auto; font-size: 11px; color: var(--green); font-weight: 800; }
+    .presence-absent { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: var(--red-bg); border: 1px solid rgba(187,59,48,.12); margin-bottom: 8px; }
+    .log-item { padding: 8px 10px; border-radius: 8px; background: var(--surface2); margin-bottom: 6px; font-size: 12px; border-left: 3px solid var(--line2); }
+    .log-item.success { border-left-color: var(--green); }
+    .log-item.warn { border-left-color: var(--amber); }
+    .log-time { font-family: 'DM Mono', monospace; color: var(--soft); margin-right: 6px; font-size: 11px; }
+    .empty-state { text-align: center; color: var(--soft); padding: 30px 16px; font-size: 13px; }
+
+    /* ADMIN SECTION */
+    .admin-section { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .admin-section-title { font-weight: 800; font-size: 15px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .section-icon { width: 28px; height: 28px; border-radius: 8px; background: var(--accent-bg); color: var(--accent); display: grid; place-items: center; font-size: 14px; }
+
+    /* SESSIONS LIST */
+    .session-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; background: var(--surface); }
+    .session-info { flex: 1; min-width: 0; }
+    .session-exports { display: flex; gap: 6px; flex-shrink: 0; }
+
+    /* MODAL */
+    .modal-bg { position: fixed; inset: 0; background: rgba(22,18,14,.45); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; backdrop-filter: blur(4px); }
+    .modal-bg.open { display: flex; }
+    .modal { width: min(580px, 100%); background: var(--surface); border-radius: 16px; border: 1px solid var(--line); box-shadow: 0 20px 60px rgba(0,0,0,.18); padding: 24px; max-height: 92vh; overflow: auto; }
+    .modal-title { font-weight: 900; font-size: 20px; margin-bottom: 5px; }
+    .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+    .upload-zone { border: 2px dashed var(--line2); background: var(--surface2); border-radius: 10px; padding: 24px; text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+    .upload-zone:hover { border-color: var(--accent); background: var(--accent-bg); }
+    .divider-or { display: flex; align-items: center; gap: 10px; color: var(--soft); font-size: 12px; margin: 16px 0; }
+    .divider-or::before, .divider-or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+
+    /* TOAST */
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 30; background: var(--ink); color: white; border-radius: 11px; padding: 13px 16px; box-shadow: var(--shadow); opacity: 0; transform: translateY(14px); transition: .22s; font-size: 13px; max-width: 320px; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { background: var(--red); }
+    .toast.success { background: var(--green); }
+
+    /* CAPTURE PROGRESS */
+    .capture-bar-wrap { background: var(--surface); border-top: 1px solid var(--line); padding: 10px 16px; flex-shrink: 0; }
+    .capture-bar { height: 8px; background: var(--surface2); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+    .capture-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 999px; transition: width .4s; }
+
+    @media (max-width: 1050px) {
+      body { overflow: auto; }
+      .app { height: auto; min-height: 100vh; }
+      .layout { grid-template-columns: 1fr; }
+      .sidebar, .rightpanel { border: 0; border-bottom: 1px solid var(--line); }
+      .camera { height: 52vh; }
+      .topbar { height: auto; padding: 12px; flex-wrap: wrap; }
+      .top-right { margin-left: 0; }
+      .stats-row { grid-template-columns: repeat(2,1fr); }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useEffect, useMemo, useRef, useState, useCallback} = React;
+
+const api = async (url, options = {}) => {
+  const res = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...options});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+  return data;
+};
+
+const initials = (name = '') => name.split(' ').filter(Boolean).slice(0,2).map(p => p[0]).join('').toUpperCase() || 'FA';
+const fmtTime = (iso) => iso ? iso.slice(11, 19) : '-';
+const fmtDate = (iso) => iso ? iso.slice(0, 10) : '-';
+
+// ── Icons (inline SVG) ──
+const Icon = {
+  camera: '📷', user: '👤', users: '👥', class: '🏫', book: '📚', stats: '📊',
+  admin: '⚙️', check: '✓', x: '✕', download: '⬇', plus: '+', play: '▶',
+  stop: '⏹', refresh: '↺', log: '📋', eye: '👁'
+};
+
+function App() {
+  const [data, setData] = useState({teachers: [], classes: [], students: [], sessions: [], camera: {}});
+  const [teacherId, setTeacherId] = useState('');
+  const [courseId, setCourseId] = useState('');
+  const [logged, setLogged] = useState(false);
+  const [loginTab, setLoginTab] = useState('login'); // 'login' | 'register'
+  const [view, setView] = useState('appel');
+  const [panel, setPanel] = useState('presences');
+  const [cameraIndex, setCameraIndex] = useState(1);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState({msg:'', kind:''});
+  const [report, setReport] = useState([]);
+
+  // Forms
+  const [studentForm, setStudentForm] = useState({full_name:'', class_id:'', target_count:8});
+  const [classForm, setClassForm] = useState({name:'', level:'', school_year:'2025-2026'});
+  const [teacherForm, setTeacherForm] = useState({full_name:'', teacher_code:''});
+  const [courseForm, setCourseForm] = useState({name:'', class_id:'', teacher_id:'', weekday:'Lundi', starts_at:'09:00', ends_at:'11:00'});
+  const [selfRegForm, setSelfRegForm] = useState({full_name:'', class_id:'', target_count:8});
+
+  // Load data
+  const load = useCallback(async () => {
+    try {
+      const payload = await api('/api/bootstrap');
+      setData(prev => {
+        if (!teacherId && payload.teachers[0]) {
+          setTeacherId(String(payload.teachers[0].id));
+          setCourseId(String(payload.teachers[0].courses[0]?.id || ''));
+        }
+        if (!studentForm.class_id && payload.classes[0]) {
+          setStudentForm(f => ({...f, class_id: payload.classes[0].id}));
+          setCourseForm(f => ({...f, class_id: payload.classes[0].id}));
+          setSelfRegForm(f => ({...f, class_id: payload.classes[0].id}));
+        }
+        return payload;
+      });
+    } catch {}
+  }, [teacherId, studentForm.class_id]);
+
+  useEffect(() => { load(); }, []);
+
+  // Poll camera status
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const camera = await api('/api/camera/status');
+        setData(d => ({...d, camera}));
+        if (camera.mode === 'idle') load();
+      } catch {}
+    }, 900);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const teacher = data.teachers.find(t => String(t.id) === String(teacherId));
+  const course = teacher?.courses.find(c => String(c.id) === String(courseId)) || teacher?.courses[0];
+  const classStudents = data.students.filter(s => !course || Number(s.class_id) === Number(course.class_id));
+  const activeSession = data.sessions.find(s => Number(s.id) === Number(data.camera.session_id)) || data.sessions[0];
+  const livePresence = data.camera.live_presence || [];
+  const presentCount = livePresence.length || activeSession?.present_count || 0;
+  const absentCount = Math.max(0, classStudents.length - presentCount);
+
+  // Reload report when session changes
+  useEffect(() => {
+    if (!activeSession?.id) return;
+    api(`/api/sessions/${activeSession.id}/report`).then(res => setReport(res.rows)).catch(() => {});
+  }, [activeSession?.id]);
+
+  const showToast = (msg, kind='') => {
+    setToast({msg, kind});
+    setTimeout(() => setToast({msg:'', kind:''}), 3000);
+  };
+
+  // ── Actions ──
+  const doLogin = () => {
+    if (!teacher || !course) return showToast('Choisis un professeur et un cours', 'error');
+    setLogged(true);
+    showToast(`Session ${course.class_name} ouverte`, 'success');
+  };
+
+  const startAttendance = async () => {
+    try {
+      const res = await api('/api/attendance/start', {method:'POST', body: JSON.stringify({course_id: course.id, camera_index: cameraIndex})});
+      showToast(`Appel lancé – session #${res.session_id}`, 'success');
+      setView('appel');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const stopCamera = async () => {
+    await api('/api/camera/stop', {method:'POST', body:'{}'});
+    showToast('Caméra arrêtée');
+    await load();
+  };
+
+  const startCapture = async (studentId) => {
+    try {
+      await api('/api/capture/start', {method:'POST', body: JSON.stringify({student_id: studentId, camera_index: cameraIndex, target_count: studentForm.target_count})});
+      showToast('Capture visage lancée', 'success');
+      setView('appel');
+      setModal(null);
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const saveStudent = async () => {
+    if (!studentForm.full_name.trim()) return showToast('Nom requis', 'error');
+    try {
+      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: studentForm.full_name, class_id: studentForm.class_id})});
+      showToast(`Étudiant ajouté`, 'success');
+      setStudentForm(f => ({...f, full_name:''}));
+      await load();
+      // Start face capture immediately
+      await startCapture(res.student.id);
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const selfRegister = async () => {
+    if (!selfRegForm.full_name.trim()) return showToast('Nom complet requis', 'error');
+    if (!selfRegForm.class_id) return showToast('Classe requise', 'error');
+    try {
+      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: selfRegForm.full_name, class_id: selfRegForm.class_id})});
+      await api('/api/capture/start', {method:'POST', body: JSON.stringify({student_id: res.student.id, camera_index: cameraIndex, target_count: selfRegForm.target_count})});
+      setLogged(true);
+      setView('appel');
+      showToast(`Bienvenue ${selfRegForm.full_name} ! Capture en cours…`, 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const addClass = async () => {
+    if (!classForm.name.trim()) return showToast('Nom de classe requis', 'error');
+    try {
+      await api('/api/classes', {method:'POST', body: JSON.stringify(classForm)});
+      setClassForm({name:'', level:'', school_year:'2025-2026'});
+      showToast('Classe ajoutée', 'success');
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const addTeacher = async () => {
+    if (!teacherForm.full_name.trim() || !teacherForm.teacher_code.trim()) return showToast('Nom et ID requis', 'error');
+    try {
+      await api('/api/teachers', {method:'POST', body: JSON.stringify(teacherForm)});
+      setTeacherForm({full_name:'', teacher_code:''});
+      showToast('Professeur ajouté', 'success');
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const addCourse = async () => {
+    if (!courseForm.name.trim() || !courseForm.class_id || !courseForm.teacher_id) return showToast('Tous les champs requis', 'error');
+    try {
+      await api('/api/courses', {method:'POST', body: JSON.stringify(courseForm)});
+      setCourseForm(f => ({...f, name:''}));
+      showToast('Cours ajouté', 'success');
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const importCSV = async (file) => {
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    let count = 0;
+    for (const line of lines.slice(1)) {
+      const [nom, prenom, , classe] = line.split(',').map(v => (v||'').replace(/"/g,'').trim());
+      const classRow = data.classes.find(c => c.name === (classe || course?.class_name)) || data.classes[0];
+      if ((nom||prenom) && classRow) {
+        const fn = prenom && nom ? `${prenom} ${nom}` : (prenom || nom);
+        await api('/api/students', {method:'POST', body: JSON.stringify({full_name: fn, class_id: classRow.id})});
+        count++;
+      }
+    }
+    showToast(`${count} étudiant(s) importé(s)`, 'success');
+    await load();
+  };
+
+  // ─── LOGIN SCREEN ───
+  if (!logged) {
+    return <div className="login">
+      <div className="login-card">
+        <div className="brand">
+          <div className="brand-mark">F</div>
+          <div><div className="brand-name">FaceAttend</div><div className="brand-sub">Système de présence faciale</div></div>
+        </div>
+        <div className="login-tabs">
+          <button className={`login-tab ${loginTab==='login'?'active':''}`} onClick={() => setLoginTab('login')}>Connexion Professeur</button>
+          <button className={`login-tab ${loginTab==='register'?'active':''}`} onClick={() => setLoginTab('register')}>Je m'inscris</button>
+        </div>
+
+        {loginTab === 'login' ? <>
+          <div className="field">
+            <label className="label">Professeur</label>
+            <select className="select" value={teacherId} onChange={e => { setTeacherId(e.target.value); const t = data.teachers.find(t=>String(t.id)===e.target.value); if(t?.courses[0]) setCourseId(String(t.courses[0].id)); }}>
+              {data.teachers.map(t => <option key={t.id} value={t.id}>{t.full_name} ({t.teacher_code})</option>)}
+            </select>
+          </div>
+          {teacher && <div className="preview">
+            <div className="avatar">{initials(teacher.full_name)}</div>
+            <div><div className="name">{teacher.full_name}</div><div className="meta">{teacher.courses.length} cours assigné(s)</div></div>
+          </div>}
+          <div className="field">
+            <label className="label">Cours &amp; Classe</label>
+            <select className="select" value={courseId} onChange={e => setCourseId(e.target.value)}>
+              {teacher?.courses.map(c => <option key={c.id} value={c.id}>{c.class_name} – {c.name} ({c.weekday} {c.starts_at}–{c.ends_at})</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label className="label">Index caméra (0=webcam, 1=iVCam…)</label>
+            <input className="input" type="number" min="0" max="10" value={cameraIndex} onChange={e => setCameraIndex(e.target.value)} />
+          </div>
+          <button className="btn primary full" style={{marginTop:6}} onClick={doLogin}>Lancer la session →</button>
+        </> : <>
+          <p style={{color:'var(--muted)',fontSize:13,marginBottom:18}}>
+            Inscris-toi directement — entre ton nom, choisis ta classe, et la caméra capturera ton visage pour te reconnaître lors des appels suivants.
+          </p>
+          <div className="field"><label className="label">Nom complet</label>
+            <input className="input" placeholder="Ahmed Benali" value={selfRegForm.full_name} onChange={e => setSelfRegForm(f=>({...f,full_name:e.target.value}))} />
+          </div>
+          <div className="row2">
+            <div className="field"><label className="label">Classe</label>
+              <select className="select" value={selfRegForm.class_id} onChange={e => setSelfRegForm(f=>({...f,class_id:e.target.value}))}>
+                <option value="">-- Choisir --</option>
+                {data.classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label className="label">Photos visage</label>
+              <input className="input" type="number" min="4" max="20" value={selfRegForm.target_count} onChange={e => setSelfRegForm(f=>({...f,target_count:e.target.value}))} />
+            </div>
+          </div>
+          <div className="field"><label className="label">Index caméra</label>
+            <input className="input" type="number" min="0" max="10" value={cameraIndex} onChange={e => setCameraIndex(e.target.value)} />
+          </div>
+          <button className="btn green full" onClick={selfRegister}>M'inscrire et capturer mon visage →</button>
+        </>}
+      </div>
+    </div>;
+  }
+
+  // ─── MAIN APP ───
+  const camMode = data.camera.mode;
+  const isLive = camMode !== 'idle';
+
+  return <div className="app">
+    {/* TOP BAR */}
+    <div className="topbar">
+      <div className="topbrand"><div className="topmark">F</div>FaceAttend</div>
+      <div className="divider" />
+      <div className="chips">
+        <span className={`chip ${isLive?'live':''}`}>{isLive ? '● Session active' : 'Prêt'}</span>
+        {course && <span className="chip">{course.class_name}</span>}
+        {course && <span className="chip">{course.name}</span>}
+        <span className="chip">{new Date().toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'})}</span>
+      </div>
+      <div className="top-right">
+        <div className="teacher-pill"><span className="mini-avatar">{initials(teacher?.full_name)}</span>{teacher?.full_name}</div>
+        <button className="btn outline small" onClick={() => setLogged(false)}>Quitter</button>
+      </div>
+    </div>
+
+    {/* LAYOUT */}
+    <div className="layout">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="side-section">
+          <div className="side-label">Navigation</div>
+          {[
+            {id:'appel', label:'Appel facial', icon:'📷'},
+            {id:'etudiants', label:'Étudiants', icon:'👥', badge: classStudents.length},
+            {id:'seances', label:'Séances', icon:'📋', badge: data.sessions.length},
+            {id:'stats', label:'Statistiques', icon:'📊'},
+            {id:'admin', label:'Administration', icon:'⚙️'},
+          ].map(({id, label, icon, badge}) =>
+            <div key={id} className={`nav ${view===id?'active':''}`} onClick={()=>setView(id)}>
+              <span>{icon}</span>{label}{badge != null && <span className="nav-badge">{badge}</span>}
+            </div>
+          )}
+        </div>
+        <div className="side-section">
+          <div className="side-label">Actions rapides</div>
+          <div className="nav" onClick={() => setModal('student')}>➕ Ajouter étudiant</div>
+          <div className="nav" onClick={startAttendance}>▶ Démarrer l'appel</div>
+          {isLive && <div className="nav" style={{color:'var(--red)'}} onClick={stopCamera}>⏹ Arrêter la caméra</div>}
+        </div>
+        <div className="side-bottom">
+          <div className="stat-mini">
+            <div className="sm-label">Présents</div>
+            <div className="sm-value" style={{color:'var(--green)'}}>{presentCount}</div>
+          </div>
+          <div className="stat-mini">
+            <div className="sm-label">Absents</div>
+            <div className="sm-value" style={{color:'var(--amber)'}}>{absentCount}</div>
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main className="center">
+        {/* APPEL VIEW */}
+        {view === 'appel' && <>
+          <div className="camera">
+            {isLive
+              ? <img src={`/video_feed?t=${camMode}`} alt="flux caméra" />
+              : <div className="cam-empty">
+                  <div style={{fontSize:40}}>📷</div>
+                  <strong>Caméra prête</strong>
+                  <span style={{color:'#9a9086',fontSize:13}}>Lance un appel ou une capture depuis le menu.</span>
+                  <button className="btn green" style={{margin:'0 auto'}} onClick={startAttendance}>▶ Démarrer l'appel</button>
+                </div>}
+            <div className="scanline" />
+            <div className="corner tl" /><div className="corner tr" />
+            <div className="corner bl" /><div className="corner br" />
+          </div>
+          {camMode === 'capture' && <div className="capture-bar-wrap">
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--muted)'}}>
+              <span>📸 Capture visage — {data.camera.captured}/{data.camera.target_count} photos</span>
+              <span>{data.camera.status}</span>
+            </div>
+            <div className="capture-bar"><div className="capture-fill" style={{width: `${(data.camera.captured/Math.max(1,data.camera.target_count))*100}%`}} /></div>
+          </div>}
+          <div className="statusbar">
+            <div className="status-items">
+              <span><span className={`dot ${isLive?'orange':'gray'}`} />{isLive?'Caméra active':'Inactive'}</span>
+              <span>FPS: {data.camera.fps || '-'}</span>
+              <span>Visages: {data.camera.detected || 0}</span>
+              {data.camera.distance && <span>Dist: {data.camera.distance}</span>}
+            </div>
+            <span style={{color:'var(--ink)',fontWeight:700}}>{data.camera.status || 'En attente'}</span>
+          </div>
+        </>}
+
+        {/* ÉTUDIANTS */}
+        {view === 'etudiants' && <section className="view">
+          <div className="view-head">
+            <div><div className="view-title">Étudiants – {course?.class_name}</div><div className="view-sub">{classStudents.length} inscrit(s)</div></div>
+            <button className="btn primary small" onClick={()=>setModal('student')}>+ Ajouter</button>
+          </div>
+          {classStudents.length === 0
+            ? <div className="empty-state">Aucun étudiant dans cette classe.<br/>Cliquez sur « Ajouter » pour commencer.</div>
+            : <div className="grid-cards">
+              {classStudents.map(s => <div className="card student-card" key={s.id}>
+                <div className="avatar lg">{initials(s.full_name)}</div>
+                <div><div className="name">{s.full_name}</div><div className="meta">{s.class_name || course?.class_name}</div></div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  <span className={`badge ${s.samples_count>0?'green':'red'}`}>{s.samples_count || 0} 📷</span>
+                  {s.samples_count === 0 && <button className="btn small" style={{fontSize:11}} onClick={()=>startCapture(s.id)}>Capturer</button>}
+                </div>
+              </div>)}
+            </div>}
+        </section>}
+
+        {/* SÉANCES */}
+        {view === 'seances' && <section className="view">
+          <div className="view-head">
+            <div><div className="view-title">Séances d'appel</div><div className="view-sub">{data.sessions.length} séance(s)</div></div>
+          </div>
+          {data.sessions.length === 0
+            ? <div className="empty-state">Aucune séance encore. Lancez un appel depuis la vue « Appel facial ».</div>
+            : data.sessions.map(s => <div className="session-row" key={s.id}>
+              <div style={{width:36,height:36,borderRadius:9,background:'var(--accent-bg)',color:'var(--accent)',display:'grid',placeItems:'center',fontSize:13,fontWeight:900,flexShrink:0}}>#{s.id}</div>
+              <div className="session-info">
+                <div className="name">{s.class_name} – {s.course_name}</div>
+                <div className="meta">{fmtDate(s.started_at)} {fmtTime(s.started_at)} · {s.teacher_name} · <span style={{color:'var(--green)',fontWeight:700}}>{s.present_count} présents</span></div>
+              </div>
+              <div className="session-exports">
+                {['csv','xlsx','pdf'].map(fmt =>
+                  <a key={fmt} className="btn outline small" href={`/api/export/${s.id}/${fmt}`} download>⬇ {fmt.toUpperCase()}</a>
+                )}
+              </div>
+            </div>)}
+        </section>}
+
+        {/* STATS */}
+        {view === 'stats' && <section className="view">
+          <div className="view-head">
+            <div><div className="view-title">Statistiques</div><div className="view-sub">Session #{activeSession?.id || '-'} – {fmtDate(activeSession?.started_at)}</div></div>
+            {activeSession && <div style={{display:'flex',gap:6}}>
+              {['csv','xlsx','pdf'].map(fmt =>
+                <a key={fmt} className="btn outline small" href={`/api/export/${activeSession.id}/${fmt}`} download>⬇ {fmt.toUpperCase()}</a>
+              )}
+            </div>}
+          </div>
+          <div className="stats-row">
+            <div className="stat-card"><div className="stat-label">Présents</div><div className="stat-value" style={{color:'var(--green)'}}>{presentCount}</div></div>
+            <div className="stat-card"><div className="stat-label">Absents</div><div className="stat-value" style={{color:'var(--red)'}}>{absentCount}</div></div>
+            <div className="stat-card"><div className="stat-label">Inscrits</div><div className="stat-value">{classStudents.length}</div></div>
+            <div className="stat-card"><div className="stat-label">Taux</div><div className="stat-value" style={{color:'var(--blue)'}}>{classStudents.length ? Math.round(presentCount/classStudents.length*100) : 0}%</div></div>
+          </div>
+          {report.length > 0
+            ? <div className="table-wrap">
+              <table>
+                <thead><tr><th>Étudiant</th><th>Statut</th><th>Heure</th><th>Confiance</th></tr></thead>
+                <tbody>
+                  {report.map(r => <tr key={r.full_name}>
+                    <td style={{fontWeight:600}}>{r.full_name}</td>
+                    <td><span className={`badge ${r.status==='present'?'green':'red'}`}>{r.status === 'present' ? '✓ Présent' : '✕ Absent'}</span></td>
+                    <td style={{fontFamily:'DM Mono, monospace',fontSize:12}}>{r.recognized_at ? fmtTime(r.recognized_at) : '-'}</td>
+                    <td>{r.confidence ? <span className="badge blue">{Math.round(r.confidence*100)}%</span> : '-'}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+            : <div className="empty-state">Aucune donnée de présence pour la session sélectionnée.</div>}
+        </section>}
+
+        {/* ADMIN */}
+        {view === 'admin' && <section className="view">
+          <div className="view-head">
+            <div><div className="view-title">Administration</div><div className="view-sub">Gérez les classes, professeurs, cours et étudiants</div></div>
+          </div>
+          <div className="stats-row">
+            <div className="stat-card"><div className="stat-label">Classes</div><div className="stat-value">{data.classes.length}</div></div>
+            <div className="stat-card"><div className="stat-label">Professeurs</div><div className="stat-value">{data.teachers.length}</div></div>
+            <div className="stat-card"><div className="stat-label">Cours</div><div className="stat-value">{data.teachers.reduce((a,t)=>a+t.courses.length,0)}</div></div>
+            <div className="stat-card"><div className="stat-label">Étudiants</div><div className="stat-value">{data.students.length}</div></div>
+          </div>
+
+          {/* Add Class */}
+          <div className="admin-section">
+            <div className="admin-section-title"><div className="section-icon">🏫</div>Ajouter une Classe</div>
+            <div className="row3">
+              <input className="input" placeholder="Nom (ex: 5ISI)" value={classForm.name} onChange={e=>setClassForm({...classForm,name:e.target.value})} />
+              <input className="input" placeholder="Niveau / Filière" value={classForm.level} onChange={e=>setClassForm({...classForm,level:e.target.value})} />
+              <input className="input" placeholder="Année (2025-2026)" value={classForm.school_year} onChange={e=>setClassForm({...classForm,school_year:e.target.value})} />
+            </div>
+            <button className="btn primary small" style={{marginTop:10}} onClick={addClass}>+ Créer la classe</button>
+            <div style={{marginTop:12,display:'flex',gap:8,flexWrap:'wrap'}}>
+              {data.classes.map(c => <span key={c.id} className="badge blue">🏫 {c.name}</span>)}
+            </div>
+          </div>
+
+          {/* Add Teacher */}
+          <div className="admin-section">
+            <div className="admin-section-title"><div className="section-icon">👤</div>Ajouter un Professeur</div>
+            <div className="row2">
+              <input className="input" placeholder="Nom complet" value={teacherForm.full_name} onChange={e=>setTeacherForm({...teacherForm,full_name:e.target.value})} />
+              <input className="input" placeholder="Code ID (ex: PROF-MATH)" value={teacherForm.teacher_code} onChange={e=>setTeacherForm({...teacherForm,teacher_code:e.target.value})} />
+            </div>
+            <button className="btn primary small" style={{marginTop:10}} onClick={addTeacher}>+ Ajouter le professeur</button>
+            <div style={{marginTop:12,display:'flex',gap:8,flexWrap:'wrap'}}>
+              {data.teachers.map(t => <span key={t.id} className="badge amber">👤 {t.full_name}</span>)}
+            </div>
+          </div>
+
+          {/* Add Course */}
+          <div className="admin-section">
+            <div className="admin-section-title"><div className="section-icon">📚</div>Ajouter un Cours</div>
+            <div className="row2">
+              <input className="input" placeholder="Intitulé du cours" value={courseForm.name} onChange={e=>setCourseForm({...courseForm,name:e.target.value})} />
+              <select className="select" value={courseForm.weekday} onChange={e=>setCourseForm({...courseForm,weekday:e.target.value})}>
+                {['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'].map(d=><option key={d}>{d}</option>)}
+              </select>
+            </div>
+            <div className="row3" style={{marginTop:10}}>
+              <select className="select" value={courseForm.class_id} onChange={e=>setCourseForm({...courseForm,class_id:e.target.value})}>
+                <option value="">Classe…</option>
+                {data.classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select className="select" value={courseForm.teacher_id} onChange={e=>setCourseForm({...courseForm,teacher_id:e.target.value})}>
+                <option value="">Professeur…</option>
+                {data.teachers.map(t=><option key={t.id} value={t.id}>{t.full_name}</option>)}
+              </select>
+              <div className="row2" style={{gap:6}}>
+                <input className="input" type="time" value={courseForm.starts_at} onChange={e=>setCourseForm({...courseForm,starts_at:e.target.value})} />
+                <input className="input" type="time" value={courseForm.ends_at} onChange={e=>setCourseForm({...courseForm,ends_at:e.target.value})} />
+              </div>
+            </div>
+            <button className="btn primary small" style={{marginTop:10}} onClick={addCourse}>+ Créer le cours</button>
+          </div>
+
+          {/* Import CSV */}
+          <div className="admin-section">
+            <div className="admin-section-title"><div className="section-icon">📥</div>Importer des Étudiants (CSV)</div>
+            <p className="meta" style={{marginBottom:10}}>Format : <code>nom, prenom, id_étudiant, classe</code> (en-tête sur la 1ère ligne)</p>
+            <label className="upload-zone">
+              <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>importCSV(e.target.files[0])} />
+              📁 Cliquer pour choisir un fichier CSV
+            </label>
+          </div>
+        </section>}
+      </main>
+
+      {/* RIGHT PANEL */}
+      <aside className="rightpanel">
+        <div className="tabs">
+          <button className={`tab ${panel==='presences'?'active':''}`} onClick={()=>setPanel('presences')}>
+            ✓ Présences {livePresence.length > 0 && `(${livePresence.length})`}
+          </button>
+          <button className={`tab ${panel==='logs'?'active':''}`} onClick={()=>setPanel('logs')}>Journal</button>
+        </div>
+        <div className="panel-body">
+          {panel === 'presences' ? <>
+            {/* Live presence list during attendance */}
+            {data.camera.mode === 'attendance' && livePresence.length === 0 && (
+              <div className="empty-state">
+                <div style={{fontSize:28,marginBottom:8}}>👁</div>
+                Appel en cours… les présences apparaîtront ici en temps réel.
+              </div>
+            )}
+            {livePresence.map((p, i) => (
+              <div className="presence-live" key={p.student_id}>
+                <div className="mini-avatar" style={{width:32,height:32,fontSize:13}}>{initials(p.name)}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                  <div style={{fontSize:11,color:'var(--green)'}}>reconnu</div>
+                </div>
+                <span className="presence-time">{p.time}</span>
+                <span className="presence-conf">{p.confidence}%</span>
+              </div>
+            ))}
+            {/* After attendance – show full report */}
+            {data.camera.mode !== 'attendance' && report.length > 0 && <>
+              <div style={{fontSize:11,color:'var(--soft)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:800,marginBottom:10}}>
+                Session #{activeSession?.id} – {fmtDate(activeSession?.started_at)}
+              </div>
+              {report.filter(r => r.status === 'present').map(r => (
+                <div className="presence-live" key={r.full_name}>
+                  <div className="mini-avatar" style={{width:32,height:32,fontSize:13}}>{initials(r.full_name)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{r.full_name}</div>
+                    <div style={{fontSize:11,color:'var(--green)'}}>{r.recognized_at ? fmtTime(r.recognized_at) : ''}</div>
+                  </div>
+                  {r.confidence && <span className="presence-conf">{Math.round(r.confidence*100)}%</span>}
+                </div>
+              ))}
+              {report.filter(r => r.status !== 'present').map(r => (
+                <div className="presence-absent" key={r.full_name}>
+                  <div className="mini-avatar" style={{width:32,height:32,fontSize:13,background:'var(--red-bg)',color:'var(--red)'}}>{initials(r.full_name)}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{r.full_name}</div>
+                    <div style={{fontSize:11,color:'var(--red)'}}>absent</div>
+                  </div>
+                </div>
+              ))}
+              {report.length === 0 && data.camera.mode === 'idle' && (
+                <div className="empty-state">Lance un appel pour voir les présences ici.</div>
+              )}
+            </>}
+          </> : <>
+            {(data.camera.logs || []).length === 0
+              ? <div className="empty-state">Journal vide.</div>
+              : (data.camera.logs || []).map((l, i) => (
+                <div className={`log-item ${l.kind||''}`} key={i}>
+                  <span className="log-time">{l.time}</span>{l.message}
+                </div>
+              ))}
+          </>}
+        </div>
+      </aside>
+    </div>
+
+    {/* MODAL – Ajouter Étudiant */}
+    {modal === 'student' && <div className="modal-bg open" onClick={e=>e.target===e.currentTarget&&setModal(null)}>
+      <div className="modal">
+        <div className="modal-title">Ajouter un Étudiant</div>
+        <div className="modal-sub">L'étudiant est créé puis la caméra capture automatiquement les photos du visage.</div>
+        <div className="field"><label className="label">Nom complet</label>
+          <input className="input" placeholder="Ahmed Benali" value={studentForm.full_name} onChange={e=>setStudentForm({...studentForm,full_name:e.target.value})} />
+        </div>
+        <div className="row2">
+          <div className="field"><label className="label">Classe</label>
+            <select className="select" value={studentForm.class_id} onChange={e=>setStudentForm({...studentForm,class_id:e.target.value})}>
+              <option value="">-- Choisir --</option>
+              {data.classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="field"><label className="label">Nbre de photos</label>
+            <input className="input" type="number" min="4" max="30" value={studentForm.target_count} onChange={e=>setStudentForm({...studentForm,target_count:e.target.value})} />
+          </div>
+        </div>
+        <div className="field"><label className="label">Index caméra</label>
+          <input className="input" type="number" min="0" max="10" value={cameraIndex} onChange={e=>setCameraIndex(e.target.value)} />
+        </div>
+        {data.camera.mode === 'capture' && <div style={{padding:'10px 12px',background:'var(--green-bg)',borderRadius:9,fontSize:13,color:'var(--green)',fontWeight:700,marginBottom:10}}>
+          📸 Capture en cours… {data.camera.captured}/{data.camera.target_count}
+        </div>}
+        <div className="divider-or">ou importer depuis CSV</div>
+        <label className="upload-zone" style={{marginBottom:16}}>
+          <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>{ importCSV(e.target.files[0]); setModal(null); }} />
+          📁 Importer liste CSV (nom, prenom, id, classe)
+        </label>
+        <div className="actions">
+          <button className="btn outline" onClick={()=>setModal(null)}>Annuler</button>
+          <button className="btn primary" onClick={saveStudent}>Enregistrer et capturer</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* TOAST */}
+    <div className={`toast ${toast.msg?'show':''} ${toast.kind}`}>{toast.msg}</div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
