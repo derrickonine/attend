@@ -1,6 +1,7 @@
 import csv
 import os
 import pickle
+import shutil
 import sqlite3
 import sys
 import time
@@ -29,19 +30,85 @@ DATA_DIR = APP_DIR / "data"
 FACES_DIR = DATA_DIR / "faces"
 EXPORTS_DIR = APP_DIR / "exports"
 DB_PATH = DATA_DIR / "attendance.db"
+YOLO_FACE_MODEL_PATH = APP_DIR / "src" / "detection" / "models" / "yolov8n-face.pt"
 FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 FACE_SIZE = (80, 80)
 
 
+class FaceDetectorBackend:
+    def __init__(self):
+        self.name = "OpenCV Haar"
+        self.model = None
+        self.model_path = YOLO_FACE_MODEL_PATH
+        self._try_load_yolo()
+
+    def _try_load_yolo(self):
+        if not self.model_path.exists():
+            return
+        try:
+            from ultralytics import YOLO
+
+            self.model = YOLO(str(self.model_path))
+            self.name = "YOLOv8 Face"
+        except Exception:
+            self.model = None
+            self.name = "OpenCV Haar"
+
+    def detect(self, frame):
+        if self.model is not None:
+            try:
+                return self._detect_yolo(frame)
+            except Exception:
+                self.model = None
+                self.name = "OpenCV Haar"
+        return self._detect_haar(frame)
+
+    def _detect_yolo(self, frame):
+        results = self.model(frame, conf=0.5, iou=0.4, verbose=False)
+        boxes = []
+        height, width = frame.shape[:2]
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                x1 = max(0, min(width - 1, x1))
+                y1 = max(0, min(height - 1, y1))
+                x2 = max(0, min(width, x2))
+                y2 = max(0, min(height, y2))
+                w = x2 - x1
+                h = y2 - y1
+                if w >= 30 and h >= 30:
+                    boxes.append((x1, y1, w, h))
+        return sorted(boxes, key=lambda item: item[2] * item[3], reverse=True)
+
+    def _detect_haar(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = FACE_CASCADE.detectMultiScale(
+            gray,
+            scaleFactor=1.2,
+            minNeighbors=5,
+            minSize=(60, 60),
+        )
+        return sorted(faces, key=lambda item: item[2] * item[3], reverse=True)
+
+
+FACE_DETECTOR = FaceDetectorBackend()
+
+
 def detect_faces(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = FACE_CASCADE.detectMultiScale(
-        gray,
-        scaleFactor=1.2,
-        minNeighbors=5,
-        minSize=(60, 60),
-    )
-    return sorted(faces, key=lambda item: item[2] * item[3], reverse=True)
+    return FACE_DETECTOR.detect(frame)
+
+
+def detector_status():
+    return {
+        "name": FACE_DETECTOR.name,
+        "uses_yolo": FACE_DETECTOR.model is not None,
+        "model_path": str(YOLO_FACE_MODEL_PATH.relative_to(APP_DIR)),
+        "model_found": YOLO_FACE_MODEL_PATH.exists(),
+    }
+
+
+def face_detector_name():
+    return FACE_DETECTOR.name
 
 
 def crop_face(frame, face_box, padding=30):
@@ -73,6 +140,7 @@ class Database:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.create_schema()
+        self.migrate_schema()
         self.seed_data()
 
     def create_schema(self):
@@ -109,6 +177,8 @@ class Database:
                 full_name TEXT NOT NULL,
                 class_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
+                biometric_consent INTEGER NOT NULL DEFAULT 0,
+                biometric_consent_at TEXT,
                 UNIQUE(full_name, class_id),
                 FOREIGN KEY(class_id) REFERENCES classes(id)
             );
@@ -206,12 +276,33 @@ class Database:
             (teacher_id,),
         ).fetchall()
 
-    def get_student_or_create(self, full_name, class_id):
+    def get_student_or_create(self, full_name, class_id, biometric_consent=False):
         now = datetime.now().isoformat(timespec="seconds")
         self.conn.execute(
-            "INSERT OR IGNORE INTO students(full_name, class_id, created_at) VALUES (?, ?, ?)",
-            (full_name.strip(), class_id, now),
+            """
+            INSERT OR IGNORE INTO students(
+                full_name, class_id, created_at, biometric_consent, biometric_consent_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                full_name.strip(),
+                class_id,
+                now,
+                1 if biometric_consent else 0,
+                now if biometric_consent else None,
+            ),
         )
+        if biometric_consent:
+            self.conn.execute(
+                """
+                UPDATE students
+                   SET biometric_consent = 1,
+                       biometric_consent_at = COALESCE(biometric_consent_at, ?)
+                 WHERE full_name = ? AND class_id = ?
+                """,
+                (now, full_name.strip(), class_id),
+            )
         self.conn.commit()
         return self.conn.execute(
             "SELECT * FROM students WHERE full_name = ? AND class_id = ?",
@@ -250,6 +341,46 @@ class Database:
             metadata.append({"student_id": row["student_id"], "name": row["full_name"]})
         return encodings, metadata
 
+    def student_face_samples(self, student_id):
+        return self.conn.execute(
+            """
+            SELECT face_samples.*, students.full_name, classes.name AS class_name
+            FROM face_samples
+            JOIN students ON students.id = face_samples.student_id
+            JOIN classes ON classes.id = students.class_id
+            WHERE face_samples.student_id = ?
+            ORDER BY face_samples.created_at DESC, face_samples.id DESC
+            """,
+            (student_id,),
+        ).fetchall()
+
+    def regenerate_student_encodings(self, student_id):
+        updated = 0
+        for row in self.student_face_samples(student_id):
+            image = cv2.imread(str(APP_DIR / row["image_path"]))
+            if image is None:
+                continue
+            encoding = face_descriptor(image)
+            self.conn.execute(
+                "UPDATE face_samples SET encoding = ? WHERE id = ?",
+                (pickle.dumps(np.asarray(encoding)), row["id"]),
+            )
+            updated += 1
+        self.conn.commit()
+        return updated
+
+    def delete_student(self, student_id, remove_files=True):
+        samples = self.student_face_samples(student_id)
+        self.conn.execute("DELETE FROM attendance_records WHERE student_id = ?", (student_id,))
+        self.conn.execute("DELETE FROM face_samples WHERE student_id = ?", (student_id,))
+        self.conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+        self.conn.commit()
+
+        if remove_files:
+            for folder in {(APP_DIR / row["image_path"]).parent.resolve() for row in samples}:
+                if folder.exists() and FACES_DIR.resolve() in folder.parents:
+                    shutil.rmtree(folder, ignore_errors=True)
+
     def create_session(self, course):
         started_at = datetime.now().isoformat(timespec="seconds")
         cur = self.conn.execute(
@@ -264,32 +395,116 @@ class Database:
 
     def close_session(self, session_id):
         self.conn.execute(
-            "UPDATE attendance_sessions SET ended_at = ? WHERE id = ?",
+            "UPDATE attendance_sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
             (datetime.now().isoformat(timespec="seconds"), session_id),
         )
         self.conn.commit()
 
-    def mark_present(self, session_id, student_id, confidence):
+    def migrate_schema(self):
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(students)").fetchall()
+        }
+        if "biometric_consent" not in columns:
+            self.conn.execute(
+                "ALTER TABLE students ADD COLUMN biometric_consent INTEGER NOT NULL DEFAULT 0"
+            )
+        if "biometric_consent_at" not in columns:
+            self.conn.execute("ALTER TABLE students ADD COLUMN biometric_consent_at TEXT")
+        self.conn.commit()
+
+    def close_open_sessions(self, notes="Fermeture automatique"):
+        ended_at = datetime.now().isoformat(timespec="seconds")
         self.conn.execute(
             """
-            INSERT OR IGNORE INTO attendance_records(session_id, student_id, status, recognized_at, confidence)
-            VALUES (?, ?, 'present', ?, ?)
+            UPDATE attendance_sessions
+               SET ended_at = ?,
+                   notes = COALESCE(notes, ?)
+             WHERE ended_at IS NULL
+            """,
+            (ended_at, notes),
+        )
+        self.conn.commit()
+
+    def mark_present(self, session_id, student_id, confidence):
+        now = datetime.now().isoformat(timespec="seconds")
+        cur = self.conn.execute(
+            """
+            UPDATE attendance_records
+               SET status = 'present',
+                   recognized_at = ?,
+                   confidence = ?
+             WHERE session_id = ? AND student_id = ?
             """,
             (
+                now,
+                float(confidence) if confidence is not None else None,
                 session_id,
                 student_id,
-                datetime.now().isoformat(timespec="seconds"),
-                float(confidence) if confidence is not None else None,
             ),
         )
+        if cur.rowcount == 0:
+            self.conn.execute(
+                """
+                INSERT INTO attendance_records(session_id, student_id, status, recognized_at, confidence)
+                VALUES (?, ?, 'present', ?, ?)
+                """,
+                (
+                    session_id,
+                    student_id,
+                    now,
+                    float(confidence) if confidence is not None else None,
+                ),
+            )
+        self.conn.commit()
+
+    def set_attendance_status(self, session_id, student_id, status, confidence=None):
+        if status not in ("present", "absent"):
+            raise ValueError("Statut invalide")
+        now = datetime.now().isoformat(timespec="seconds")
+        confidence_value = float(confidence) if confidence is not None else None
+        cur = self.conn.execute(
+            """
+            UPDATE attendance_records
+               SET status = ?,
+                   recognized_at = ?,
+                   confidence = ?
+             WHERE session_id = ? AND student_id = ?
+            """,
+            (
+                status,
+                now,
+                confidence_value if status == "present" else None,
+                session_id,
+                student_id,
+            ),
+        )
+        if cur.rowcount == 0:
+            self.conn.execute(
+                """
+                INSERT INTO attendance_records(session_id, student_id, status, recognized_at, confidence)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    student_id,
+                    status,
+                    now,
+                    confidence_value if status == "present" else None,
+                ),
+            )
         self.conn.commit()
 
     def list_students(self, class_id):
         return self.conn.execute(
             """
             SELECT students.*,
-                   COUNT(face_samples.id) AS samples_count
+                   classes.name AS class_name,
+                   COUNT(face_samples.id) AS samples_count,
+                   COUNT(face_samples.encoding) AS encodings_count,
+                   MAX(face_samples.created_at) AS last_sample_at
             FROM students
+            JOIN classes ON classes.id = students.class_id
             LEFT JOIN face_samples ON face_samples.student_id = students.id
             WHERE students.class_id = ?
             GROUP BY students.id
@@ -304,11 +519,14 @@ class Database:
             SELECT attendance_sessions.*,
                    courses.name AS course_name,
                    teachers.full_name AS teacher_name,
-                   COUNT(attendance_records.id) AS present_count
+                   COUNT(students.id) AS total_count,
+                   SUM(CASE WHEN attendance_records.status = 'present' THEN 1 ELSE 0 END) AS present_count
             FROM attendance_sessions
             JOIN courses ON courses.id = attendance_sessions.course_id
             JOIN teachers ON teachers.id = attendance_sessions.teacher_id
+            JOIN students ON students.class_id = attendance_sessions.class_id
             LEFT JOIN attendance_records ON attendance_records.session_id = attendance_sessions.id
+             AND attendance_records.student_id = students.id
             WHERE attendance_sessions.class_id = ?
             GROUP BY attendance_sessions.id
             ORDER BY attendance_sessions.started_at DESC
@@ -319,7 +537,8 @@ class Database:
     def attendance_report_rows(self, session_id):
         return self.conn.execute(
             """
-            SELECT students.full_name,
+            SELECT students.id AS student_id,
+                   students.full_name,
                    COALESCE(attendance_records.status, 'absent') AS status,
                    attendance_records.recognized_at,
                    attendance_records.confidence
@@ -433,8 +652,19 @@ class FaceAttendanceApp:
         student_name = simpledialog.askstring("Nouvel etudiant", "Nom complet de l'etudiant:")
         if not student_name:
             return
-        target_count = simpledialog.askinteger("Images", "Nombre d'images visage a capturer:", initialvalue=8, minvalue=3, maxvalue=30)
+        target_count = simpledialog.askinteger(
+            "Images",
+            "Nombre d'images visage a capturer:\nMinimum recommande : 15 photos",
+            initialvalue=15,
+            minvalue=3,
+            maxvalue=30,
+        )
         if not target_count:
+            return
+        if target_count < 15 and not messagebox.askyesno(
+            "Dataset faible",
+            "Minimum recommande : 15 photos.\nContinuer quand meme avec un dataset plus faible ?",
+        ):
             return
         camera_index = self.ask_camera_index()
         student = self.db.get_student_or_create(student_name, self.course["class_id"])
@@ -525,7 +755,7 @@ class FaceAttendanceApp:
         session_id = self.db.create_session(self.course)
         marked = set()
         stable = {}
-        threshold = 0.36
+        threshold = 0.30
         messagebox.showinfo("Appel", "Appel demarre. Appuie sur Q ou ESC pour terminer.")
 
         while True:
@@ -534,14 +764,19 @@ class FaceAttendanceApp:
                 break
             faces = detect_faces(frame)
 
+            current_seen = set()
+
             for face_box in faces:
                 face_img = crop_face(frame, face_box)
                 descriptor = face_descriptor(face_img)
                 distances = [descriptor_distance(known, descriptor) for known in known_encodings]
+
                 name = "Inconnu"
                 student_id = None
                 confidence = None
+                distance = None
                 color = (0, 80, 255)
+
                 if len(distances):
                     best_index = int(np.argmin(distances))
                     distance = float(distances[best_index])
@@ -551,11 +786,18 @@ class FaceAttendanceApp:
                         confidence = max(0.0, 1.0 - distance)
                         color = (0, 180, 80)
 
+                stable_count = 0
                 if student_id is not None:
-                    stable[student_id] = stable.get(student_id, 0) + 1
-                    if stable[student_id] >= 3 and student_id not in marked:
+                    if student_id not in current_seen:
+                        stable[student_id] = stable.get(student_id, 0) + 1
+                        current_seen.add(student_id)
+                    stable_count = stable[student_id]
+                    if stable_count >= 5 and student_id not in marked:
                         self.db.mark_present(session_id, student_id, confidence)
                         marked.add(student_id)
+
+                print(f"{name} | distance={distance if distance is not None else 'n/a'} | stable={stable_count}")
+
                 left, top, width, height = face_box
                 right = left + width
                 bottom = top + height
@@ -564,6 +806,10 @@ class FaceAttendanceApp:
                     label += " - present"
                 cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
                 cv2.putText(frame, label, (left, max(25, top - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            for student_id in list(stable.keys()):
+                if student_id not in current_seen and student_id not in marked:
+                    stable[student_id] = 0
 
             cv2.putText(frame, f"Classe {self.course['class_name']} | Presents: {len(marked)} | Q pour finir", (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (30, 30, 30), 2)
             cv2.imshow("Appel par reconnaissance faciale", frame)

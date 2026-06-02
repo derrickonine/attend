@@ -11,12 +11,18 @@ Elle gere une connexion professeur, une classe, les etudiants ajoutes depuis la 
 - Tableau de bord avec nom du professeur, cours, classe et horaire.
 - Inscription d'un etudiant sans preregistrement.
 - Capture de plusieurs images du visage avec iVCam ou une webcam.
+- Detection visage YOLOv8 si `src/detection/models/yolov8n-face.pt` est present, avec fallback OpenCV Haar.
 - Installation simplifiee sans `dlib` ni `face-recognition`.
 - Reconnaissance pendant l'appel avec nom affiche au-dessus du visage.
 - Presence enregistree automatiquement dans SQLite.
-- Exports par seance en CSV, Excel `.xlsx` et PDF.
+- Correction manuelle des presences depuis l'interface web.
+- Consentement biometrique sauvegarde dans SQLite.
+- Qualite dataset affichee pour chaque etudiant: Faible, Bon, Excellent.
+- Actions etudiant: voir photos, recapturer, regenerer les encodages, supprimer.
+- Indicateurs camera: FPS, visages detectes, visages reconnus, camera, confiance moyenne, dernier etudiant reconnu.
+- Exports par seance en CSV, Excel `.xlsx`, PDF et JSON.
 - Base de donnees locale: `data/attendance.db`.
-- Administration web: ajout de classes, professeurs, import CSV et sauvegarde JSON.
+- Administration web: ajout de classes, professeurs, cours, import CSV et export JSON.
 
 ## Comptes professeur inclus
 
@@ -73,6 +79,20 @@ python app.py
 10. Appuie sur `Q` ou `ESC` pour terminer l'appel.
 11. Selectionne une seance et exporte en CSV, Excel ou PDF.
 
+## Scenario de soutenance recommande
+
+1. Lancer la version web avec `python web_app.py`.
+2. Ouvrir `http://127.0.0.1:5000`.
+3. Se connecter avec un professeur, par exemple `PROF-4ISI`.
+4. Verifier l'indicateur du detecteur dans la barre camera: `YOLOv8 Face` si le modele est present, sinon `OpenCV Haar`.
+5. Ajouter un etudiant et capturer idealement 15 images ou plus.
+6. Montrer la qualite du dataset, les photos, et le badge de reconnaissance.
+7. Lancer l'appel et montrer les indicateurs temps reel: FPS, visages detectes, reconnus, confiance moyenne.
+8. Aller dans `Statistiques`, corriger manuellement un statut si necessaire.
+9. Exporter la seance en CSV, XLSX, PDF ou JSON.
+
+Note: l'export PDF necessite `reportlab`. Si le paquet n'est pas installe, les autres exports restent disponibles.
+
 ## Dossiers importants
 
 - `app.py`: nouvelle application principale.
@@ -83,8 +103,6 @@ python app.py
 
 ## Ameliorations possibles ensuite
 
-- Ajouter un compte administrateur pour creer plusieurs classes et professeurs depuis l'interface.
 - Ajouter des mots de passe professeurs.
 - Ajouter une page d'historique par etudiant.
-- Ajouter une correction manuelle des absences.
 - Passer a une application web Flask/Django si plusieurs professeurs doivent l'utiliser depuis plusieurs machines.

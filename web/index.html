@@ -268,7 +268,7 @@ const Icon = {
 };
 
 function App() {
-  const [data, setData] = useState({teachers: [], classes: [], students: [], sessions: [], camera: {}});
+  const [data, setData] = useState({teachers: [], classes: [], students: [], sessions: [], camera: {}, stats: {}});
   const [teacherId, setTeacherId] = useState('');
   const [courseId, setCourseId] = useState('');
   const [logged, setLogged] = useState(false);
@@ -279,13 +279,15 @@ function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState({msg:'', kind:''});
   const [report, setReport] = useState([]);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [studentPhotos, setStudentPhotos] = useState([]);
 
   // Forms
-  const [studentForm, setStudentForm] = useState({full_name:'', class_id:'', target_count:8});
+  const [studentForm, setStudentForm] = useState({full_name:'', class_id:'', target_count:15, biometric_consent:false});
   const [classForm, setClassForm] = useState({name:'', level:'', school_year:'2025-2026'});
   const [teacherForm, setTeacherForm] = useState({full_name:'', teacher_code:''});
   const [courseForm, setCourseForm] = useState({name:'', class_id:'', teacher_id:'', weekday:'Lundi', starts_at:'09:00', ends_at:'11:00'});
-  const [selfRegForm, setSelfRegForm] = useState({full_name:'', class_id:'', target_count:8});
+  const [selfRegForm, setSelfRegForm] = useState({full_name:'', class_id:'', target_count:15, biometric_consent:false});
 
   // Load data
   const load = useCallback(async () => {
@@ -325,8 +327,22 @@ function App() {
   const classStudents = data.students.filter(s => !course || Number(s.class_id) === Number(course.class_id));
   const activeSession = data.sessions.find(s => Number(s.id) === Number(data.camera.session_id)) || data.sessions[0];
   const livePresence = data.camera.live_presence || [];
-  const presentCount = livePresence.length || activeSession?.present_count || 0;
+  const reportPresentCount = report.filter(r => r.status === 'present').length;
+  const presentCount = livePresence.length || (report.length ? reportPresentCount : activeSession?.present_count || 0);
   const absentCount = Math.max(0, classStudents.length - presentCount);
+  const datasetQuality = (count = 0) => count >= 20 ? 'Excellent' : count >= 15 ? 'Bon' : 'Faible';
+  const qualityClass = (quality) => quality === 'Excellent' ? 'green' : quality === 'Bon' ? 'blue' : 'amber';
+  const confidenceClass = (value) => {
+    const percent = Number(value || 0) * 100;
+    if (percent >= 85) return 'green';
+    if (percent >= 70) return 'amber';
+    return 'red';
+  };
+
+  const validateCaptureCount = (count) => {
+    const value = Number(count || 0);
+    return value >= 15 || window.confirm('Minimum recommandé : 15 photos. Continuer quand même avec un dataset plus faible ?');
+  };
 
   // Reload report when session changes
   useEffect(() => {
@@ -337,6 +353,54 @@ function App() {
   const showToast = (msg, kind='') => {
     setToast({msg, kind});
     setTimeout(() => setToast({msg:'', kind:''}), 3000);
+  };
+
+  const refreshReport = async () => {
+    if (!activeSession?.id) return;
+    try {
+      const res = await api(`/api/sessions/${activeSession.id}/report`);
+      setReport(res.rows);
+      await load();
+    } catch {}
+  };
+
+  const updateAttendance = async (studentId, status) => {
+    if (!activeSession?.id) return showToast('Aucune seance selectionnee', 'error');
+    try {
+      const res = await api(`/api/sessions/${activeSession.id}/attendance/${studentId}`, {
+        method: 'POST',
+        body: JSON.stringify({status})
+      });
+      setReport(res.rows);
+      await load();
+      showToast(status === 'present' ? 'Etudiant marque present' : 'Etudiant marque absent', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const openStudentPhotos = async (student) => {
+    setSelectedStudent(student);
+    try {
+      const res = await api(`/api/students/${student.id}/photos`);
+      setStudentPhotos(res.photos || []);
+      setModal('photos');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const regenerateStudent = async (student) => {
+    try {
+      const res = await api(`/api/students/${student.id}/regenerate`, {method:'POST', body:'{}'});
+      showToast(`${res.updated} encodage(s) régénéré(s)`, 'success');
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const deleteStudent = async (student) => {
+    if (!window.confirm(`Supprimer définitivement ${student.full_name} et ses images visage ?`)) return;
+    try {
+      await api(`/api/students/${student.id}`, {method:'DELETE'});
+      showToast('Étudiant supprimé', 'success');
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
   };
 
   // ── Actions ──
@@ -361,6 +425,7 @@ function App() {
   };
 
   const startCapture = async (studentId) => {
+    if (!validateCaptureCount(studentForm.target_count)) return;
     try {
       await api('/api/capture/start', {method:'POST', body: JSON.stringify({student_id: studentId, camera_index: cameraIndex, target_count: studentForm.target_count})});
       showToast('Capture visage lancée', 'success');
@@ -371,10 +436,12 @@ function App() {
 
   const saveStudent = async () => {
     if (!studentForm.full_name.trim()) return showToast('Nom requis', 'error');
+    if (!studentForm.biometric_consent) return showToast('Autorisation biométrique requise', 'error');
+    if (!validateCaptureCount(studentForm.target_count)) return;
     try {
-      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: studentForm.full_name, class_id: studentForm.class_id})});
+      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: studentForm.full_name, class_id: studentForm.class_id, biometric_consent: studentForm.biometric_consent})});
       showToast(`Étudiant ajouté`, 'success');
-      setStudentForm(f => ({...f, full_name:''}));
+      setStudentForm(f => ({...f, full_name:'', biometric_consent:false}));
       await load();
       // Start face capture immediately
       await startCapture(res.student.id);
@@ -384,8 +451,10 @@ function App() {
   const selfRegister = async () => {
     if (!selfRegForm.full_name.trim()) return showToast('Nom complet requis', 'error');
     if (!selfRegForm.class_id) return showToast('Classe requise', 'error');
+    if (!selfRegForm.biometric_consent) return showToast('Autorisation biométrique requise', 'error');
+    if (!validateCaptureCount(selfRegForm.target_count)) return;
     try {
-      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: selfRegForm.full_name, class_id: selfRegForm.class_id})});
+      const res = await api('/api/students', {method:'POST', body: JSON.stringify({full_name: selfRegForm.full_name, class_id: selfRegForm.class_id, biometric_consent: selfRegForm.biometric_consent})});
       await api('/api/capture/start', {method:'POST', body: JSON.stringify({student_id: res.student.id, camera_index: cameraIndex, target_count: selfRegForm.target_count})});
       setLogged(true);
       setView('appel');
@@ -433,7 +502,7 @@ function App() {
       const classRow = data.classes.find(c => c.name === (classe || course?.class_name)) || data.classes[0];
       if ((nom||prenom) && classRow) {
         const fn = prenom && nom ? `${prenom} ${nom}` : (prenom || nom);
-        await api('/api/students', {method:'POST', body: JSON.stringify({full_name: fn, class_id: classRow.id})});
+        await api('/api/students', {method:'POST', body: JSON.stringify({full_name: fn, class_id: classRow.id, biometric_consent: true})});
         count++;
       }
     }
@@ -491,9 +560,14 @@ function App() {
               </select>
             </div>
             <div className="field"><label className="label">Photos visage</label>
-              <input className="input" type="number" min="4" max="20" value={selfRegForm.target_count} onChange={e => setSelfRegForm(f=>({...f,target_count:e.target.value}))} />
+              <input className="input" type="number" min="1" max="30" value={selfRegForm.target_count} onChange={e => setSelfRegForm(f=>({...f,target_count:e.target.value}))} />
+              <div className="meta" style={{marginTop:5}}>Minimum recommandé : 15 photos</div>
             </div>
           </div>
+          <label style={{display:'flex',gap:9,alignItems:'flex-start',fontSize:13,color:'var(--muted)',margin:'4px 0 16px'}}>
+            <input type="checkbox" checked={selfRegForm.biometric_consent} onChange={e => setSelfRegForm(f=>({...f,biometric_consent:e.target.checked}))} />
+            <span>J'autorise l'utilisation de mes données biométriques pour la gestion des présences.</span>
+          </label>
           <div className="field"><label className="label">Index caméra</label>
             <input className="input" type="number" min="0" max="10" value={cameraIndex} onChange={e => setCameraIndex(e.target.value)} />
           </div>
@@ -564,6 +638,14 @@ function App() {
       <main className="center">
         {/* APPEL VIEW */}
         {view === 'appel' && <>
+          {isLive && <div style={{padding:'10px 16px',background:'var(--green-bg)',borderBottom:'1px solid rgba(38,115,77,.18)',display:'flex',gap:12,flexWrap:'wrap',fontSize:12,fontWeight:800,color:'var(--green)'}}>
+            <span>Session active</span>
+            <span>Professeur: {teacher?.full_name}</span>
+            <span>Classe: {course?.class_name}</span>
+            <span>Cours: {course?.name}</span>
+            <span>Présents: {presentCount}/{classStudents.length}</span>
+            <span>Taux: {classStudents.length ? Math.round(presentCount/classStudents.length*100) : 0}%</span>
+          </div>}
           <div className="camera">
             {isLive
               ? <img src={`/video_feed?t=${camMode}`} alt="flux caméra" />
@@ -589,7 +671,12 @@ function App() {
               <span><span className={`dot ${isLive?'orange':'gray'}`} />{isLive?'Caméra active':'Inactive'}</span>
               <span>FPS: {data.camera.fps || '-'}</span>
               <span>Visages: {data.camera.detected || 0}</span>
+              <span>Détecteur: {data.camera.detector?.name || 'OpenCV Haar'}</span>
+              <span>Reconnus: {data.camera.recognized || 0}</span>
+              <span>Caméra: {data.camera.camera_index ?? cameraIndex}</span>
+              {data.camera.avg_confidence && <span>Confiance moy.: {Math.round(data.camera.avg_confidence*100)}%</span>}
               {data.camera.distance && <span>Dist: {data.camera.distance}</span>}
+              {data.camera.last_recognized && <span>Dernier: {data.camera.last_recognized}</span>}
             </div>
             <span style={{color:'var(--ink)',fontWeight:700}}>{data.camera.status || 'En attente'}</span>
           </div>
@@ -606,10 +693,20 @@ function App() {
             : <div className="grid-cards">
               {classStudents.map(s => <div className="card student-card" key={s.id}>
                 <div className="avatar lg">{initials(s.full_name)}</div>
-                <div><div className="name">{s.full_name}</div><div className="meta">{s.class_name || course?.class_name}</div></div>
+                <div><div className="name">{s.full_name}</div><div className="meta">{s.class_name || course?.class_name} · inscrit le {fmtDate(s.created_at)}</div></div>
                 <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                  <span className={`badge ${s.samples_count>0?'green':'red'}`}>{s.samples_count || 0} 📷</span>
-                  {s.samples_count === 0 && <button className="btn small" style={{fontSize:11}} onClick={()=>startCapture(s.id)}>Capturer</button>}
+                  <span className={`badge ${s.recognition_ready?'green':'amber'}`}>{s.recognition_ready ? '✓ Reconnaissance prête' : '⚠ Dataset incomplet'}</span>
+                  <span className={`badge ${qualityClass(s.dataset_quality || datasetQuality(s.samples_count))}`}>{s.dataset_quality || datasetQuality(s.samples_count)}</span>
+                  <span className={`badge ${s.samples_count>=15?'green':'red'}`}>{s.samples_count || 0} images</span>
+                  <span className="badge blue">{s.encodings_count || 0} encodages</span>
+                  <span className={`badge ${s.biometric_consent?'green':'red'}`}>{s.biometric_consent ? 'Consentement OK' : 'Consentement manquant'}</span>
+                  {s.last_sample_at && <span className="badge amber">Dernière capture {fmtDate(s.last_sample_at)}</span>}
+                </div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  <button className="btn outline small" onClick={()=>openStudentPhotos(s)}>Voir photos</button>
+                  <button className="btn small" onClick={()=>startCapture(s.id)}>Recapturer</button>
+                  <button className="btn blue small" onClick={()=>regenerateStudent(s)}>Régénérer</button>
+                  <button className="btn red small" onClick={()=>deleteStudent(s)}>Supprimer</button>
                 </div>
               </div>)}
             </div>}
@@ -626,10 +723,15 @@ function App() {
               <div style={{width:36,height:36,borderRadius:9,background:'var(--accent-bg)',color:'var(--accent)',display:'grid',placeItems:'center',fontSize:13,fontWeight:900,flexShrink:0}}>#{s.id}</div>
               <div className="session-info">
                 <div className="name">{s.class_name} – {s.course_name}</div>
-                <div className="meta">{fmtDate(s.started_at)} {fmtTime(s.started_at)} · {s.teacher_name} · <span style={{color:'var(--green)',fontWeight:700}}>{s.present_count} présents</span></div>
+                <div className="meta">
+                  {fmtDate(s.started_at)} {fmtTime(s.started_at)}-{fmtTime(s.ended_at)} · {s.teacher_name} ·
+                  <span style={{color:'var(--green)',fontWeight:700}}> {s.present_count || 0} présents</span> ·
+                  <span style={{color:'var(--red)',fontWeight:700}}> {Math.max(0, (s.total_count || classStudents.length) - (s.present_count || 0))} absents</span> ·
+                  Taux {s.total_count ? Math.round((s.present_count || 0)/(s.total_count || 1)*100) : 0}%
+                </div>
               </div>
               <div className="session-exports">
-                {['csv','xlsx','pdf'].map(fmt =>
+                {['csv','xlsx','pdf','json'].map(fmt =>
                   <a key={fmt} className="btn outline small" href={`/api/export/${s.id}/${fmt}`} download>⬇ {fmt.toUpperCase()}</a>
                 )}
               </div>
@@ -641,27 +743,62 @@ function App() {
           <div className="view-head">
             <div><div className="view-title">Statistiques</div><div className="view-sub">Session #{activeSession?.id || '-'} – {fmtDate(activeSession?.started_at)}</div></div>
             {activeSession && <div style={{display:'flex',gap:6}}>
-              {['csv','xlsx','pdf'].map(fmt =>
+              {['csv','xlsx','pdf','json'].map(fmt =>
                 <a key={fmt} className="btn outline small" href={`/api/export/${activeSession.id}/${fmt}`} download>⬇ {fmt.toUpperCase()}</a>
               )}
             </div>}
           </div>
+          <div className="admin-section" style={{padding:14}}>
+            <div className="row3">
+              <select className="select" value={course?.class_id || ''} onChange={e=>setStudentForm(f=>({...f,class_id:e.target.value}))}>
+                {data.classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select className="select" value={teacherId} onChange={e=>{ setTeacherId(e.target.value); const t=data.teachers.find(t=>String(t.id)===e.target.value); if(t?.courses[0]) setCourseId(String(t.courses[0].id)); }}>
+                {data.teachers.map(t=><option key={t.id} value={t.id}>{t.full_name}</option>)}
+              </select>
+              <select className="select" value={courseId} onChange={e=>setCourseId(e.target.value)}>
+                {teacher?.courses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="stats-row">
             <div className="stat-card"><div className="stat-label">Présents</div><div className="stat-value" style={{color:'var(--green)'}}>{presentCount}</div></div>
             <div className="stat-card"><div className="stat-label">Absents</div><div className="stat-value" style={{color:'var(--red)'}}>{absentCount}</div></div>
-            <div className="stat-card"><div className="stat-label">Inscrits</div><div className="stat-value">{classStudents.length}</div></div>
-            <div className="stat-card"><div className="stat-label">Taux</div><div className="stat-value" style={{color:'var(--blue)'}}>{classStudents.length ? Math.round(presentCount/classStudents.length*100) : 0}%</div></div>
+            <div className="stat-card"><div className="stat-label">Séances</div><div className="stat-value">{data.stats?.total_sessions || data.sessions.length}</div></div>
+            <div className="stat-card"><div className="stat-label">Taux moyen</div><div className="stat-value" style={{color:'var(--blue)'}}>{data.stats?.average_attendance_rate || 0}%</div></div>
+          </div>
+          <div className="admin-section">
+            <div className="admin-section-title"><div className="section-icon">📈</div>Évolution des présences</div>
+            <div style={{display:'grid',gap:9}}>
+              {(data.stats?.sessions_trend || []).length === 0 && <div className="empty-state">Aucune séance à analyser.</div>}
+              {(data.stats?.sessions_trend || []).map(item => <div key={item.id} style={{display:'grid',gridTemplateColumns:'48px 1fr 52px',gap:10,alignItems:'center',fontSize:12}}>
+                <strong>{item.label}</strong>
+                <div style={{height:10,background:'var(--surface2)',borderRadius:999,overflow:'hidden'}}>
+                  <div style={{height:'100%',width:`${item.rate}%`,background:'var(--green)',borderRadius:999}} />
+                </div>
+                <span style={{fontFamily:'DM Mono, monospace'}}>{item.rate}%</span>
+              </div>)}
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:14}}>
+              <span className="badge blue">Meilleur taux: {data.stats?.best_attendance_rate || 0}%</span>
+              <span className="badge amber">Étudiants: {classStudents.length}</span>
+              <span className="badge green">Exports CSV/XLSX/PDF/JSON</span>
+            </div>
           </div>
           {report.length > 0
             ? <div className="table-wrap">
               <table>
-                <thead><tr><th>Étudiant</th><th>Statut</th><th>Heure</th><th>Confiance</th></tr></thead>
+                <thead><tr><th>Étudiant</th><th>Statut</th><th>Heure</th><th>Confiance</th><th>Actions</th></tr></thead>
                 <tbody>
                   {report.map(r => <tr key={r.full_name}>
                     <td style={{fontWeight:600}}>{r.full_name}</td>
                     <td><span className={`badge ${r.status==='present'?'green':'red'}`}>{r.status === 'present' ? '✓ Présent' : '✕ Absent'}</span></td>
                     <td style={{fontFamily:'DM Mono, monospace',fontSize:12}}>{r.recognized_at ? fmtTime(r.recognized_at) : '-'}</td>
-                    <td>{r.confidence ? <span className="badge blue">{Math.round(r.confidence*100)}%</span> : '-'}</td>
+                    <td>{r.confidence ? <span className={`badge ${confidenceClass(r.confidence)}`}>{Math.round(r.confidence*100)}%</span> : '-'}</td>
+                    <td>
+                      <button className="btn green small" onClick={() => updateAttendance(r.student_id, 'present')} disabled={r.status === 'present'}>Présent</button>
+                      <button className="btn red small" style={{marginLeft:6}} onClick={() => updateAttendance(r.student_id, 'absent')} disabled={r.status !== 'present'}>Absent</button>
+                    </td>
                   </tr>)}
                 </tbody>
               </table>
@@ -756,6 +893,29 @@ function App() {
         </div>
         <div className="panel-body">
           {panel === 'presences' ? <>
+            {view !== 'appel' && <div style={{display:'grid',gap:10}}>
+              {view === 'etudiants' && <>
+                <div className="stat-mini"><div className="sm-label">Étudiants</div><div className="sm-value">{classStudents.length}</div></div>
+                <div className="badge green">Reconnaissance prête: {classStudents.filter(s=>s.recognition_ready).length}</div>
+                <div className="badge amber">Dataset incomplet: {classStudents.filter(s=>!s.recognition_ready).length}</div>
+              </>}
+              {view === 'seances' && <>
+                <div className="stat-mini"><div className="sm-label">Séances</div><div className="sm-value">{data.sessions.length}</div></div>
+                <div className="badge green">Présents session: {activeSession?.present_count || 0}</div>
+                <div className="badge red">Absents session: {Math.max(0, (activeSession?.total_count || classStudents.length) - (activeSession?.present_count || 0))}</div>
+              </>}
+              {view === 'admin' && <>
+                <div className="stat-mini"><div className="sm-label">Classes</div><div className="sm-value">{data.classes.length}</div></div>
+                <div className="badge blue">Professeurs: {data.teachers.length}</div>
+                <div className="badge amber">Cours: {data.teachers.reduce((a,t)=>a+t.courses.length,0)}</div>
+              </>}
+              {view === 'stats' && <>
+                <div className="stat-mini"><div className="sm-label">Taux moyen</div><div className="sm-value">{data.stats?.average_attendance_rate || 0}%</div></div>
+                <div className="badge blue">Meilleur taux: {data.stats?.best_attendance_rate || 0}%</div>
+                <div className="badge green">Total séances: {data.stats?.total_sessions || 0}</div>
+              </>}
+            </div>}
+            {view === 'appel' && <>
             {/* Live presence list during attendance */}
             {data.camera.mode === 'attendance' && livePresence.length === 0 && (
               <div className="empty-state">
@@ -771,11 +931,12 @@ function App() {
                   <div style={{fontSize:11,color:'var(--green)'}}>reconnu</div>
                 </div>
                 <span className="presence-time">{p.time}</span>
-                <span className="presence-conf">{p.confidence}%</span>
+                <span className={`badge ${confidenceClass((p.confidence || 0)/100)}`}>{p.confidence}%</span>
               </div>
             ))}
+            </>}
             {/* After attendance – show full report */}
-            {data.camera.mode !== 'attendance' && report.length > 0 && <>
+            {view === 'appel' && data.camera.mode !== 'attendance' && report.length > 0 && <>
               <div style={{fontSize:11,color:'var(--soft)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:800,marginBottom:10}}>
                 Session #{activeSession?.id} – {fmtDate(activeSession?.started_at)}
               </div>
@@ -786,7 +947,7 @@ function App() {
                     <div style={{fontWeight:700,fontSize:13}}>{r.full_name}</div>
                     <div style={{fontSize:11,color:'var(--green)'}}>{r.recognized_at ? fmtTime(r.recognized_at) : ''}</div>
                   </div>
-                  {r.confidence && <span className="presence-conf">{Math.round(r.confidence*100)}%</span>}
+                  {r.confidence && <span className={`badge ${confidenceClass(r.confidence)}`}>{Math.round(r.confidence*100)}%</span>}
                 </div>
               ))}
               {report.filter(r => r.status !== 'present').map(r => (
@@ -831,9 +992,14 @@ function App() {
             </select>
           </div>
           <div className="field"><label className="label">Nbre de photos</label>
-            <input className="input" type="number" min="4" max="30" value={studentForm.target_count} onChange={e=>setStudentForm({...studentForm,target_count:e.target.value})} />
+            <input className="input" type="number" min="1" max="30" value={studentForm.target_count} onChange={e=>setStudentForm({...studentForm,target_count:e.target.value})} />
+            <div className="meta" style={{marginTop:5}}>Minimum recommandé : 15 photos</div>
           </div>
         </div>
+        <label style={{display:'flex',gap:9,alignItems:'flex-start',fontSize:13,color:'var(--muted)',margin:'4px 0 14px'}}>
+          <input type="checkbox" checked={studentForm.biometric_consent} onChange={e=>setStudentForm({...studentForm,biometric_consent:e.target.checked})} />
+          <span>J'autorise l'utilisation de mes données biométriques pour la gestion des présences.</span>
+        </label>
         <div className="field"><label className="label">Index caméra</label>
           <input className="input" type="number" min="0" max="10" value={cameraIndex} onChange={e=>setCameraIndex(e.target.value)} />
         </div>
@@ -848,6 +1014,29 @@ function App() {
         <div className="actions">
           <button className="btn outline" onClick={()=>setModal(null)}>Annuler</button>
           <button className="btn primary" onClick={saveStudent}>Enregistrer et capturer</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* MODAL – Photos Étudiant */}
+    {modal === 'photos' && selectedStudent && <div className="modal-bg open" onClick={e=>e.target===e.currentTarget&&setModal(null)}>
+      <div className="modal">
+        <div className="modal-title">{selectedStudent.full_name}</div>
+        <div className="modal-sub">
+          Dataset: {selectedStudent.dataset_quality || datasetQuality(selectedStudent.samples_count)} · {selectedStudent.samples_count || 0} image(s) · {selectedStudent.encodings_count || 0} encodage(s)
+        </div>
+        {studentPhotos.length === 0
+          ? <div className="empty-state">Aucune photo enregistrée pour cet étudiant.</div>
+          : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:10}}>
+              {studentPhotos.map(photo => <div key={photo.id} style={{border:'1px solid var(--line)',borderRadius:10,overflow:'hidden',background:'var(--surface2)'}}>
+                <img src={photo.url} alt="" style={{width:'100%',aspectRatio:'1',objectFit:'cover',display:'block'}} />
+                <div style={{fontSize:10,color:'var(--muted)',padding:6}}>{fmtDate(photo.created_at)}</div>
+              </div>)}
+            </div>}
+        <div className="actions">
+          <button className="btn outline" onClick={()=>setModal(null)}>Fermer</button>
+          <button className="btn" onClick={()=>{ setModal(null); startCapture(selectedStudent.id); }}>Recapturer</button>
+          <button className="btn blue" onClick={()=>regenerateStudent(selectedStudent)}>Régénérer les encodages</button>
         </div>
       </div>
     </div>}

@@ -1,20 +1,35 @@
 import csv
 import io
+import json
 import threading
 import time
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
-from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+except ImportError:
+    A4 = None
+    colors = None
+    cm = None
+    SimpleDocTemplate = None
+    Table = None
+    TableStyle = None
+    Paragraph = None
+    Spacer = None
+    getSampleStyleSheet = None
+    ParagraphStyle = None
 
 from app import (
     APP_DIR,
@@ -23,6 +38,7 @@ from app import (
     Database,
     crop_face,
     descriptor_distance,
+    detector_status,
     detect_faces,
     face_descriptor,
 )
@@ -31,6 +47,7 @@ from app import (
 WEB_DIR = APP_DIR / "web"
 app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="")
 db = Database()
+db.close_open_sessions("Fermee automatiquement au demarrage de l'application web")
 
 
 class CameraSession:
@@ -54,6 +71,9 @@ class CameraSession:
         self.last_detected = 0
         self.last_fps = 0
         self.last_distance = None
+        self.recognized_count = 0
+        self.confidence_scores = []
+        self.last_recognized = None
         # Live presence list: [{student_id, name, time, confidence}]
         self.live_presence = []
 
@@ -92,6 +112,10 @@ class CameraSession:
             self.known_encodings = []
             self.known_metadata = []
             self.marked = set()
+            self.live_presence = []
+            self.recognized_count = 0
+            self.confidence_scores = []
+            self.last_recognized = None
             self.last_status = "Camera inactive"
 
     def read(self):
@@ -128,7 +152,11 @@ def get_students_payload(class_id=None):
     else:
         rows = db.conn.execute(
             """
-            SELECT students.*, classes.name AS class_name, COUNT(face_samples.id) AS samples_count
+            SELECT students.*,
+                   classes.name AS class_name,
+                   COUNT(face_samples.id) AS samples_count,
+                   COUNT(face_samples.encoding) AS encodings_count,
+                   MAX(face_samples.created_at) AS last_sample_at
             FROM students
             JOIN classes ON classes.id = students.class_id
             LEFT JOIN face_samples ON face_samples.student_id = students.id
@@ -136,7 +164,20 @@ def get_students_payload(class_id=None):
             ORDER BY classes.name, students.full_name
             """
         ).fetchall()
-    return [row_to_dict(row) for row in rows]
+    payload = []
+    for row in rows:
+        item = row_to_dict(row)
+        count = int(item.get("samples_count") or 0)
+        if count >= 20:
+            quality = "Excellent"
+        elif count >= 15:
+            quality = "Bon"
+        else:
+            quality = "Faible"
+        item["dataset_quality"] = quality
+        item["recognition_ready"] = count >= 15 and bool(item.get("biometric_consent"))
+        payload.append(item)
+    return payload
 
 
 def get_sessions_payload(class_id=None):
@@ -149,17 +190,51 @@ def get_sessions_payload(class_id=None):
                    classes.name AS class_name,
                    courses.name AS course_name,
                    teachers.full_name AS teacher_name,
-                   COUNT(attendance_records.id) AS present_count
+                   COUNT(students.id) AS total_count,
+                   SUM(CASE WHEN attendance_records.status = 'present' THEN 1 ELSE 0 END) AS present_count
             FROM attendance_sessions
             JOIN classes ON classes.id = attendance_sessions.class_id
             JOIN courses ON courses.id = attendance_sessions.course_id
             JOIN teachers ON teachers.id = attendance_sessions.teacher_id
+            JOIN students ON students.class_id = attendance_sessions.class_id
             LEFT JOIN attendance_records ON attendance_records.session_id = attendance_sessions.id
+             AND attendance_records.student_id = students.id
             GROUP BY attendance_sessions.id
             ORDER BY attendance_sessions.started_at DESC
             """
         ).fetchall()
     return [row_to_dict(row) for row in rows]
+
+
+def get_system_stats_payload():
+    sessions = get_sessions_payload()
+    students = get_students_payload()
+    total_sessions = len(sessions)
+    total_students = len(students)
+    rates = []
+    for session in sessions:
+        total = int(session.get("total_count") or total_students or 0)
+        present = int(session.get("present_count") or 0)
+        rates.append(round((present / total) * 100, 1) if total else 0)
+    avg_rate = round(sum(rates) / len(rates), 1) if rates else 0
+    return {
+        "total_sessions": total_sessions,
+        "total_students": total_students,
+        "total_classes": len(get_classes_payload()),
+        "total_teachers": len(get_teachers_payload()),
+        "average_attendance_rate": avg_rate,
+        "best_attendance_rate": max(rates) if rates else 0,
+        "sessions_trend": [
+            {
+                "id": session["id"],
+                "label": f"#{session['id']}",
+                "rate": rates[index] if index < len(rates) else 0,
+                "present": int(session.get("present_count") or 0),
+                "total": int(session.get("total_count") or total_students or 0),
+            }
+            for index, session in enumerate(sessions[:8])
+        ],
+    }
 
 
 def get_course(course_id):
@@ -174,6 +249,51 @@ def get_course(course_id):
         (course_id,),
     ).fetchone()
     return row
+
+
+def get_session(session_id):
+    return db.conn.execute(
+        """
+        SELECT attendance_sessions.*, classes.name AS class_name,
+               courses.name AS course_name, teachers.full_name AS teacher_name
+        FROM attendance_sessions
+        JOIN classes ON classes.id = attendance_sessions.class_id
+        JOIN courses ON courses.id = attendance_sessions.course_id
+        JOIN teachers ON teachers.id = attendance_sessions.teacher_id
+        WHERE attendance_sessions.id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+
+
+def build_export_payload(session, rows):
+    presents = sum(1 for row in rows if row["status"] == "present")
+    return {
+        "session": {
+            "id": session["id"],
+            "class": session["class_name"],
+            "course": session["course_name"],
+            "teacher": session["teacher_name"],
+            "started_at": session["started_at"],
+            "ended_at": session["ended_at"],
+        },
+        "summary": {
+            "students": len(rows),
+            "present": presents,
+            "absent": len(rows) - presents,
+            "rate": round((presents / len(rows)) * 100, 1) if rows else 0,
+        },
+        "rows": [
+            {
+                "student_id": row["student_id"],
+                "full_name": row["full_name"],
+                "status": row["status"],
+                "recognized_at": row["recognized_at"],
+                "confidence": row["confidence"],
+            }
+            for row in rows
+        ],
+    }
 
 
 def draw_idle_frame(width=960, height=540):
@@ -239,6 +359,10 @@ def handle_attendance_frame(frame, faces):
                 db.mark_present(camera.session_id, student["student_id"], confidence)
                 camera.marked.add(student["student_id"])
                 now_str = datetime.now().strftime("%H:%M:%S")
+                camera.recognized_count += 1
+                camera.confidence_scores.append(confidence)
+                camera.confidence_scores = camera.confidence_scores[-50:]
+                camera.last_recognized = student["name"]
                 # Add to live presence list
                 camera.live_presence.append({
                     "student_id": student["student_id"],
@@ -312,6 +436,7 @@ def bootstrap():
             "students": get_students_payload(class_id),
             "sessions": get_sessions_payload(class_id),
             "camera": get_camera_status_payload(),
+            "stats": get_system_stats_payload(),
         }
     )
 
@@ -321,12 +446,75 @@ def add_student():
     data = request.get_json(force=True)
     full_name = data.get("full_name", "").strip()
     class_id = int(data.get("class_id") or 0)
+    biometric_consent = bool(data.get("biometric_consent"))
     if not full_name or not class_id:
         return jsonify({"error": "Nom et classe requis"}), 400
-    student = db.get_student_or_create(full_name, class_id)
+    if not biometric_consent:
+        return jsonify({"error": "Autorisation des donnees biometriques requise"}), 400
+    student = db.get_student_or_create(full_name, class_id, biometric_consent)
     class_row = db.conn.execute("SELECT name FROM classes WHERE id = ?", (class_id,)).fetchone()
     camera.add_log(f"Etudiant ajoute: {full_name}", "success")
-    return jsonify({"student": {**row_to_dict(student), "class_name": class_row["name"], "samples_count": 0}})
+    return jsonify(
+        {
+            "student": {
+                **row_to_dict(student),
+                "class_name": class_row["name"],
+                "samples_count": 0,
+                "encodings_count": 0,
+                "dataset_quality": "Faible",
+                "recognition_ready": False,
+            }
+        }
+    )
+
+
+@app.get("/api/students/<int:student_id>/photos")
+def student_photos(student_id):
+    rows = db.student_face_samples(student_id)
+    return jsonify(
+        {
+            "photos": [
+                {
+                    "id": row["id"],
+                    "image_path": row["image_path"],
+                    "created_at": row["created_at"],
+                    "url": f"/api/face-samples/{row['id']}/image",
+                }
+                for row in rows
+            ]
+        }
+    )
+
+
+@app.get("/api/face-samples/<int:sample_id>/image")
+def face_sample_image(sample_id):
+    row = db.conn.execute("SELECT image_path FROM face_samples WHERE id = ?", (sample_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Image introuvable"}), 404
+    path = APP_DIR / row["image_path"]
+    if not path.exists():
+        return jsonify({"error": "Fichier image introuvable"}), 404
+    return send_file(path)
+
+
+@app.post("/api/students/<int:student_id>/regenerate")
+def regenerate_student(student_id):
+    student = db.conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+    if not student:
+        return jsonify({"error": "Etudiant introuvable"}), 404
+    updated = db.regenerate_student_encodings(student_id)
+    camera.add_log(f"Encodages regeneres pour {student['full_name']}: {updated}", "success")
+    return jsonify({"ok": True, "updated": updated, "students": get_students_payload()})
+
+
+@app.delete("/api/students/<int:student_id>")
+def delete_student(student_id):
+    student = db.conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+    if not student:
+        return jsonify({"error": "Etudiant introuvable"}), 404
+    db.delete_student(student_id)
+    camera.add_log(f"Etudiant supprime: {student['full_name']}", "warn")
+    return jsonify({"ok": True, "students": get_students_payload()})
 
 
 @app.post("/api/classes")
@@ -404,7 +592,7 @@ def start_capture():
     data = request.get_json(force=True)
     student_id = int(data.get("student_id") or 0)
     camera_index = int(data.get("camera_index") or 0)
-    target_count = int(data.get("target_count") or 8)
+    target_count = int(data.get("target_count") or 15)
     student = db.conn.execute(
         """
         SELECT students.*, classes.name AS class_name
@@ -416,6 +604,8 @@ def start_capture():
     ).fetchone()
     if not student:
         return jsonify({"error": "Etudiant introuvable"}), 404
+    if camera.mode != "idle":
+        camera.stop()
     try:
         camera.open(camera_index)
     except RuntimeError as exc:
@@ -443,6 +633,9 @@ def start_attendance():
     known_encodings, known_metadata = db.load_known_faces(course["class_id"])
     if not known_encodings:
         return jsonify({"error": "Aucun visage inscrit pour cette classe"}), 400
+    if camera.mode != "idle":
+        camera.stop()
+    db.close_open_sessions("Fermee automatiquement avant une nouvelle seance")
     try:
         camera.open(camera_index)
     except RuntimeError as exc:
@@ -480,6 +673,13 @@ def get_camera_status_payload():
             "distance": camera.last_distance,
             "marked": len(camera.marked),
             "session_id": camera.session_id,
+            "detector": detector_status(),
+            "camera_index": camera.camera_index,
+            "recognized": camera.recognized_count,
+            "avg_confidence": round(sum(camera.confidence_scores) / len(camera.confidence_scores), 3)
+            if camera.confidence_scores
+            else None,
+            "last_recognized": camera.last_recognized,
             "logs": list(camera.logs[:80]),
             "live_presence": list(camera.live_presence),
         }
@@ -500,20 +700,48 @@ def session_report(session_id):
     return jsonify({"rows": [row_to_dict(row) for row in db.attendance_report_rows(session_id)]})
 
 
+@app.post("/api/sessions/<int:session_id>/attendance/<int:student_id>")
+def update_attendance_status(session_id, student_id):
+    data = request.get_json(force=True)
+    status = data.get("status", "").strip().lower()
+    if status not in ("present", "absent"):
+        return jsonify({"error": "Statut non supporte"}), 400
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"error": "Seance introuvable"}), 404
+    student = db.conn.execute(
+        "SELECT * FROM students WHERE id = ? AND class_id = ?",
+        (student_id, session["class_id"]),
+    ).fetchone()
+    if not student:
+        return jsonify({"error": "Etudiant introuvable dans cette classe"}), 404
+
+    db.set_attendance_status(session_id, student_id, status, 1.0 if status == "present" else None)
+    with camera.lock:
+        if camera.session_id == session_id:
+            if status == "present":
+                camera.marked.add(student_id)
+                if not any(item["student_id"] == student_id for item in camera.live_presence):
+                    camera.live_presence.append(
+                        {
+                            "student_id": student_id,
+                            "name": student["full_name"],
+                            "time": datetime.now().strftime("%H:%M:%S"),
+                            "confidence": 100,
+                        }
+                    )
+            else:
+                camera.marked.discard(student_id)
+                camera.live_presence = [
+                    item for item in camera.live_presence if item["student_id"] != student_id
+                ]
+    camera.add_log(f"Correction manuelle: {student['full_name']} -> {status}", "warn")
+    return jsonify({"ok": True, "rows": [row_to_dict(row) for row in db.attendance_report_rows(session_id)]})
+
+
 @app.get("/api/export/<int:session_id>/<fmt>")
 def export_session(session_id, fmt):
-    session = db.conn.execute(
-        """
-        SELECT attendance_sessions.*, classes.name AS class_name,
-               courses.name AS course_name, teachers.full_name AS teacher_name
-        FROM attendance_sessions
-        JOIN classes ON classes.id = attendance_sessions.class_id
-        JOIN courses ON courses.id = attendance_sessions.course_id
-        JOIN teachers ON teachers.id = attendance_sessions.teacher_id
-        WHERE attendance_sessions.id = ?
-        """,
-        (session_id,),
-    ).fetchone()
+    session = get_session(session_id)
     if not session:
         return jsonify({"error": "Seance introuvable"}), 404
     rows = db.attendance_report_rows(session_id)
@@ -521,6 +749,9 @@ def export_session(session_id, fmt):
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"presence_{session['class_name']}_session_{session_id}_{stamp}.{fmt}"
     path = EXPORTS_DIR / filename
+    presents = sum(1 for r in rows if r["status"] == "present")
+    absents = len(rows) - presents
+    rate = f"{round(presents / len(rows) * 100)}%" if rows else "0%"
 
     if fmt == "csv":
         with path.open("w", newline="", encoding="utf-8-sig") as f:
@@ -528,14 +759,15 @@ def export_session(session_id, fmt):
             writer.writerow(["=== FEUILLE DE PRESENCE ==="])
             writer.writerow(["Classe", session["class_name"], "Cours", session["course_name"]])
             writer.writerow(["Professeur", session["teacher_name"], "Date session", session["started_at"]])
+            writer.writerow(["Presents", presents, "Absents", absents, "Taux", rate])
             writer.writerow([])
             writer.writerow(["N°", "Etudiant", "Statut", "Heure de reconnaissance", "Confiance (%)"])
             for i, row in enumerate(rows, 1):
                 conf = f"{round(float(row['confidence']) * 100)}%" if row['confidence'] else "-"
-                writer.writerow([i, row["full_name"], row["status"].upper(), row["recognized_at"] or "-", conf])
+                status = "PRESENT" if row["status"] == "present" else "ABSENT"
+                writer.writerow([i, row["full_name"], status, row["recognized_at"] or "-", conf])
             writer.writerow([])
-            presents = sum(1 for r in rows if r["status"] == "present")
-            writer.writerow(["TOTAL", "", f"Presents: {presents}", f"Absents: {len(rows)-presents}", ""])
+            writer.writerow(["TOTAL", "", f"Presents: {presents}", f"Absents: {absents}", f"Taux: {rate}"])
 
     elif fmt == "xlsx":
         wb = Workbook()
@@ -572,26 +804,29 @@ def export_session(session_id, fmt):
         ws["B4"] = session["teacher_name"]
         ws["A5"] = "Date:"
         ws["B5"] = session["started_at"]
-        for r in range(2, 6):
+        ws["A6"] = "Synthese:"
+        ws["B6"] = f"Presents: {presents} | Absents: {absents} | Taux: {rate}"
+        for r in range(2, 7):
             ws[f"A{r}"].font = Font(bold=True)
         
-        ws.row_dimensions[6].height = 8
+        ws.row_dimensions[7].height = 8
         
         # Table headers
         headers = ["N°", "Nom de l'etudiant", "Statut", "Heure reconnaissance", "Confiance"]
         for col, h in enumerate(headers, 1):
-            cell = ws.cell(row=7, column=col, value=h)
+            cell = ws.cell(row=8, column=col, value=h)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = center
             cell.border = border
-        ws.row_dimensions[7].height = 22
+        ws.row_dimensions[8].height = 22
         
         # Data rows
         for i, row in enumerate(rows, 1):
-            r = i + 7
+            r = i + 8
             conf = f"{round(float(row['confidence']) * 100)}%" if row['confidence'] else "-"
-            vals = [i, row["full_name"], row["status"].upper(), row["recognized_at"] or "-", conf]
+            status = "PRESENT" if row["status"] == "present" else "ABSENT"
+            vals = [i, row["full_name"], status, row["recognized_at"] or "-", conf]
             fill = present_fill if row["status"] == "present" else absent_fill
             for col, val in enumerate(vals, 1):
                 cell = ws.cell(row=r, column=col, value=val)
@@ -601,10 +836,9 @@ def export_session(session_id, fmt):
                     cell.alignment = center
         
         # Summary
-        last_r = len(rows) + 9
-        presents = sum(1 for r in rows if r["status"] == "present")
+        last_r = len(rows) + 10
         ws.cell(row=last_r, column=1, value="TOTAL").font = Font(bold=True)
-        ws.cell(row=last_r, column=2, value=f"Presents: {presents}  |  Absents: {len(rows)-presents}")
+        ws.cell(row=last_r, column=2, value=f"Presents: {presents}  |  Absents: {absents}  |  Taux: {rate}")
         
         # Column widths
         ws.column_dimensions['A'].width = 6
@@ -616,6 +850,8 @@ def export_session(session_id, fmt):
         wb.save(path)
 
     elif fmt == "pdf":
+        if SimpleDocTemplate is None:
+            return jsonify({"error": "Export PDF indisponible: installe reportlab avec pip install reportlab"}), 400
         doc = SimpleDocTemplate(str(path), pagesize=A4,
                                 rightMargin=1.5*cm, leftMargin=1.5*cm,
                                 topMargin=2*cm, bottomMargin=2*cm)
@@ -710,6 +946,10 @@ def export_session(session_id, fmt):
         
         doc.build(story)
 
+    elif fmt == "json":
+        payload = build_export_payload(session, rows)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     else:
         return jsonify({"error": "Format non supporte"}), 400
 
@@ -717,4 +957,17 @@ def export_session(session_id, fmt):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+
+    def open_browser():
+        time.sleep(2)
+        webbrowser.open_new("http://127.0.0.1:5000")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=False,
+        threaded=True,
+        use_reloader=False
+    )
