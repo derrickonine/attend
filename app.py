@@ -755,7 +755,8 @@ class FaceAttendanceApp:
         session_id = self.db.create_session(self.course)
         marked = set()
         stable = {}
-        threshold = 0.30
+        threshold = 0.6
+        min_distance_gap = 0.12
         messagebox.showinfo("Appel", "Appel demarre. Appuie sur Q ou ESC pour terminer.")
 
         while True:
@@ -777,14 +778,33 @@ class FaceAttendanceApp:
                 distance = None
                 color = (0, 80, 255)
 
-                if len(distances):
+                if len(distances) >= 2:
+                    sorted_distances = sorted(distances)
+                    best_distance = sorted_distances[0]
+                    second_best_distance = sorted_distances[1]
+                else:
+                    best_distance = distances[0]
+                    second_best_distance = None
+
+                is_confident_match = (
+                    best_distance <= threshold
+                    and (
+                        second_best_distance is None
+                        or second_best_distance - best_distance >= min_distance_gap
+                    )
+                )
+
+                if is_confident_match:
                     best_index = int(np.argmin(distances))
-                    distance = float(distances[best_index])
-                    if distance <= threshold:
-                        student_id = metadata[best_index]["student_id"]
-                        name = metadata[best_index]["name"]
-                        confidence = max(0.0, 1.0 - distance)
-                        color = (0, 180, 80)
+                    student_id = metadata[best_index]["student_id"]
+                    name = metadata[best_index]["name"]
+                    confidence = max(0.0, 1.0 - best_distance)
+                    distance = best_distance
+                    color = (0, 180, 80)
+                else:
+                    student_id = None
+                    name = "Inconnu"
+                    distance = best_distance
 
                 stable_count = 0
                 if student_id is not None:
